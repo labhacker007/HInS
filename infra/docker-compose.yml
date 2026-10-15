@@ -15,11 +15,18 @@
 #
 # The medplum-server block is adapted from medplum/medplum's own
 # docker-compose.full-stack.yml (https://github.com/medplum/medplum, Apache-2.0),
-# with one deliberate change: their file pins `command: ['env']` on
-# medplum-server, which overrides the image's own entrypoint and makes the
-# container print its environment and exit instead of serving — that command
-# override is dropped here so the server actually starts, matching what
-# Medplum's own self-hosting docs describe.
+# with two fixes needed to actually get it running:
+#   1. Their file pins `command: ['env']` on medplum-server, which overrides
+#      the image's own entrypoint and makes the container print its
+#      environment and exit instead of serving. Dropped, so the image's
+#      default entrypoint runs.
+#   2. That default entrypoint takes no config-path argument, so the server
+#      falls back to a relative `medplum.config.json` in its working
+#      directory (/usr/src/medplum) and crashes with ENOENT if that file
+#      doesn't exist — true even though MEDPLUM_* env vars, once the file
+#      load succeeds, take precedence over anything inside it. Fixed by
+#      bind-mounting ./medplum.config.json (deliberately near-empty — the
+#      env vars below are what actually configure the server).
 
 services:
   postgres:
@@ -71,32 +78,11 @@ services:
         condition: service_healthy
     ports:
       - '8103:8103'
-    environment:
-      MEDPLUM_PORT: 8103
-      MEDPLUM_BASE_URL: 'http://localhost:8103/'
-      MEDPLUM_APP_BASE_URL: 'http://localhost:3000/'
-      MEDPLUM_STORAGE_BASE_URL: 'http://localhost:8103/storage/'
-
-      MEDPLUM_DATABASE_HOST: 'postgres'
-      MEDPLUM_DATABASE_PORT: 5432
-      MEDPLUM_DATABASE_DBNAME: 'medplum'
-      MEDPLUM_DATABASE_USERNAME: 'medplum'
-      MEDPLUM_DATABASE_PASSWORD: 'medplum'
-
-      MEDPLUM_REDIS_HOST: 'redis'
-      MEDPLUM_REDIS_PORT: 6379
-      MEDPLUM_REDIS_PASSWORD: 'medplum'
-
-      MEDPLUM_BINARY_STORAGE: 'file:./binary/'
-      MEDPLUM_SUPPORT_EMAIL: '"HInS Dev" <support@example.com>'
-      MEDPLUM_MAX_JSON_SIZE: '1mb'
-      MEDPLUM_MAX_BATCH_SIZE: '50mb'
-      # VM-context Bot runtime: Bots (docs §08.2) run in-process, no AWS Lambda needed for local dev.
-      MEDPLUM_VM_CONTEXT_BOTS_ENABLED: 'true'
-      MEDPLUM_DEFAULT_BOT_RUNTIME_VERSION: 'vmcontext'
-      MEDPLUM_ALLOWED_ORIGINS: '*'
-      MEDPLUM_INTROSPECTION_ENABLED: 'true'
-      MEDPLUM_SHUTDOWN_TIMEOUT_MILLISECONDS: 30000
+    volumes:
+      # The real config lives in this file, not env vars — see the fix #2
+      # note above. VM-context Bot runtime (vmContextBotsEnabled) runs Bots
+      # (docs §08.2) in-process, no AWS Lambda needed for local dev.
+      - ./medplum.config.json:/usr/src/medplum/medplum.config.json:ro
     healthcheck:
       test:
         [

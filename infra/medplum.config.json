@@ -1,0 +1,27 @@
+{
+  "port": 8103,
+  "baseUrl": "http://localhost:8103/",
+  "appBaseUrl": "http://localhost:3000/",
+  "binaryStorage": "file:./binary/",
+  "storageBaseUrl": "http://localhost:8103/storage/",
+  "supportEmail": "\"HInS Dev\" <support@example.com>",
+  "vmContextBotsEnabled": true,
+  "defaultBotRuntimeVersion": "vmcontext",
+  "allowedOrigins": "*",
+  "introspectionEnabled": true,
+  "maxJsonSize": "1mb",
+  "maxBatchSize": "50mb",
+  "database": {
+    "host": "postgres",
+    "port": 5432,
+    "dbname": "medplum",
+    "username": "medplum",
+    "password": "medplum"
+  },
+  "redis": {
+    "host": "redis",
+    "port": 6379,
+    "password": "medplum"
+  },
+  "shutdownTimeoutMilliseconds": 30000
+}
