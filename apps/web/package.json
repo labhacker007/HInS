@@ -2,5 +2,33 @@
   "name": "@hins/web",
   "version": "0.1.0",
   "private": true,
-  "description": "Placeholder — scaffolded in Phase 01. See README.md in this directory."
+  "description": "Clinician/doctor and patient web app — Phase 01, built on @medplum/react against the confirmed EMR/EHR core. See README.md in this directory.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@hins/shared": "*",
+    "@medplum/core": "5.2.5",
+    "@medplum/fhirtypes": "5.2.5",
+    "@medplum/react": "5.2.5",
+    "@mantine/core": "^8.3.18",
+    "@mantine/hooks": "^8.3.18",
+    "@mantine/notifications": "^8.3.18",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router": "^7.18.4"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "postcss": "^8.5.30",
+    "postcss-preset-mantine": "^1.18.0",
+    "postcss-simple-vars": "^7.0.1",
+    "typescript": "^5.6.0",
+    "vite": "^8.3.4"
+  }
 }

@@ -13,6 +13,7 @@
  *     nothing actually calls out to a recipient HIP/HIU yet)
  */
 import Fastify from 'fastify';
+import cors from '@fastify/cors';
 import {
   serializerCompiler,
   validatorCompiler,
@@ -36,6 +37,10 @@ const PORT = Number(process.env.PORT ?? 4001);
 const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
 app.setValidatorCompiler(validatorCompiler);
 app.setSerializerCompiler(serializerCompiler);
+
+// Dev-only: the web app runs on a different origin (Vite's :5173). A real
+// deployment should restrict this to the tenant's actual app origin(s).
+await app.register(cors, { origin: process.env.CORS_ORIGIN?.split(',') ?? true });
 
 app.get(
   '/health',

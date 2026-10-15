@@ -3,9 +3,9 @@
   "private": true,
   "description": "HInS — modular, API-first, AI-native hospital platform. See docs/PLATFORM_BLUEPRINT.md.",
   "workspaces": [
-    "apps/*",
+    "packages/*",
     "services/*",
-    "packages/*"
+    "apps/*"
   ],
   "engines": {
     "node": ">=22"
@@ -14,7 +14,7 @@
     "infra:up": "docker compose -f infra/docker-compose.yml up -d",
     "infra:down": "docker compose -f infra/docker-compose.yml down",
     "infra:logs": "docker compose -f infra/docker-compose.yml logs -f",
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build -w packages/shared && npm run build --workspaces --if-present",
     "dev:consent-service": "npm run dev -w services/consent-service",
     "dev:terminology-service": "npm run dev -w services/terminology-service"
   }

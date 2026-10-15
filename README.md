@@ -8,7 +8,9 @@ this file is just how to get a local dev environment running.
 ## Layout
 
 ```
-apps/            Web apps (clinician/admin console — Phase 01, not scaffolded yet)
+apps/
+  web/           Phase 01 MVP — clinician/doctor app + patient portal, one
+                 app split by FHIR profile role. See its own README.
 bots/            Medplum Bots: AI layer, consent gating (Phase 04, not scaffolded yet)
 services/
   consent-service/       Phase 00 — owns every consent event (blueprint §04)
@@ -47,8 +49,11 @@ npm run infra:logs    # tail logs — first boot takes a few minutes
 
 Then:
 
-- Medplum app: http://localhost:3000 — first run prompts you to register an
-  account and create a project (this becomes your dev FHIR project).
+- Medplum app: http://localhost:3000 — the **HInS Dev** project and an
+  admin account already exist (Medplum seeds `admin@example.com` /
+  `medplum_admin` on first boot of a fresh stack; this was used to create
+  the HInS Dev project itself via `Project/$init`). No manual registration
+  step needed. See `apps/web/README.md` for the full set of test accounts.
 - Medplum API: http://localhost:8103
 - Keycloak admin console: http://localhost:8080 (`admin` / `admin` — dev
   credentials only, see `infra/docker-compose.yml`)
@@ -84,6 +89,16 @@ Postgres — `POST /consents`, `GET /consents?patientId=...`, and
 (§03.5). After changing `services/consent-service/src/db/schema.ts`, run
 `npm run db:generate -w services/consent-service` to create a new
 migration, then `db:migrate` the same way as above.
+
+## Run the MVP app
+
+```bash
+npm run dev -w apps/web    # http://localhost:5173
+```
+
+One app, role-split by who signs in — see `apps/web/README.md` for what's
+built, the test accounts, and the one documented simplification (consent
+grants write directly rather than routing through an approval step yet).
 
 ## Pushing changes
 

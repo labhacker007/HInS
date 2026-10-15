@@ -1,6 +1,6 @@
 # HInS Platform Blueprint
 
-**Project Development & Requirements Document · v0.3**
+**Project Development & Requirements Document · v0.4**
 Status: Draft — decisions in progress · Scope: India + US, dual-jurisdiction · Last updated: 2026-10-15
 
 A modular, API-first, AI-native hospital operating system — architecture, compliance
@@ -30,6 +30,10 @@ Claude artifact: https://claude.ai/artifact/3NRZUR3SC5GoVQi3K1jWSw
 | 2026-10-15 | Terminology Service: plan to front a **HAPI FHIR** (Apache-2.0) terminology server rather than hand-rolling SNOMED CT/LOINC/ICD graph logic | HAPI FHIR ships `$lookup`/`$validate-code`/`$expand` out of the box — reusing it here is the same "don't reinvent the wheel" call as Medplum, just for terminology instead of the clinical datastore. Not wired up yet: needs the actual licensed SNOMED CT India edition loaded (§03.5), which isn't available in this environment. The service stays a Fastify stub until then. |
 
 **Build vs. buy, stated plainly for this round:** the EMR/EHR core, the frontend UI kit, the backend web framework, the ORM, and the terminology engine are all cases where an existing permissively-licensed project does the job — building any of them from scratch would be re-solving a already-solved, non-differentiating problem. The one piece of this round that *is* built from scratch is the Consent Service's actual domain logic (the DPDP/ABDM/HIPAA/ICMR rules themselves, §04) — no open-source project implements that combination, and it's HInS's real differentiator.
+
+| 2026-10-15 | **Phase 01 MVP built**: one Vite + React app (`apps/web`), role-split by FHIR profile type — clinician app (patient registration, encounter notes, prescriptions, consent recording) and patient portal (records view, consent grant/revoke) | Proves the confirmed stack end to end rather than leaving it as a plan. Clinician and patient flows verified in a real browser (Playwright): sign in → register patient → add note → prescribe → record consent (clinician side); sign in → view records → grant consent → revoke it (patient side). Zero console errors in either run. The HInS Dev Medplum project, its admin client application, and a test patient login were all created via Medplum's own API (`Project/$init`, project invite) rather than requiring manual browser signup. |
+
+**Simplification carried into the MVP, not hidden:** both the clinician's "record consent" and the patient's "grant consent" actions write a consent grant directly, immediately. A real ABDM flow routes a data-sharing request through the patient's own consent-manager app for approval first (§04.2) — that approval round trip isn't built; see §16. The MVP's patient-side "revoke anytime" behavior (§04.5) is real and fully tested, independent of that gap.
 
 This table grows each session the plan is revisited — see §16 for decisions still open.
 
@@ -390,7 +394,7 @@ Sequenced by dependency, not calendar.
 | Phase | Focus | Depends on |
 |---|---|---|
 | 00 — Foundations | Identity/IAM, Consent Service, Terminology Service, Medplum FHIR core, audit logging, security baseline | — |
-| 01 — Core clinical MVP | Registration, scheduling, bed management, OPD workflow, basic EMR, e-prescribing | Phase 00 |
+| 01 — Core clinical MVP | **Started 2026-10-15** — registration, OPD/encounter notes, e-prescribing, and consent recording are built and verified (`apps/web`). Not yet: scheduling, bed management, inpatient-specific workflow beyond note-taking | Phase 00 |
 | 02 — Diagnostics | LIS and RIS/PACS via the integration engine | Phase 01 |
 | 03 — Financial & admin | RCM/billing, ERP, HR, supply chain | Phase 01 |
 | 04 — AI-first layer | AI Gateway, ambient voice documentation, CDSS, guardrails | Phase 01 clinical system working without AI first |
@@ -439,6 +443,12 @@ built.
   adopted, even unmodified.
 - **Pre-approved AI providers** — which frontier vendors get a standing
   BAA/DPA template vs. case-by-case review per hospital.
+- **Consent approval round trip** — the MVP's consent actions (§05) write a
+  grant immediately; a real ABDM flow needs the request to go to the
+  patient's own consent-manager app and wait for approval (§04.2) before
+  any grant is recorded. Needs a design pass: does HInS build a reference
+  PHR/consent-manager app, or only implement the HIP/HIU side and integrate
+  with an existing one?
 
 ## 17 — References
 
