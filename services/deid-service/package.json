@@ -1,0 +1,29 @@
+{
+  "name": "@hins/deid-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "De-identification / data-exposure service — docs/PLATFORM_BLUEPRINT.md §11. The 'Data Exposure Policy' and de-identification pipeline between the API gateway and any research/admin consumer.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsc -b --watch & node --watch dist/index.js",
+    "start": "node dist/index.js",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate"
+  },
+  "dependencies": {
+    "@hins/shared": "*",
+    "fastify": "^5.12.7",
+    "@fastify/cors": "^11.3.1",
+    "fastify-type-provider-zod": "^7.0.0",
+    "zod": "^4.6.7",
+    "drizzle-orm": "^0.45.4",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
+    "drizzle-kit": "^0.31.11"
+  }
+}

@@ -1,0 +1,152 @@
+{
+  "id": "51d167a4-3354-415f-8f7d-f087d5df80d7",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.disclosure_audit_log": {
+      "name": "disclosure_audit_log",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "uuidv7()"
+        },
+        "action": {
+          "name": "action",
+          "type": "disclosure_action",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "method": {
+          "name": "method",
+          "type": "deid_method",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "purpose": {
+          "name": "purpose",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "requester_id": {
+          "name": "requester_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "requester_display_name": {
+          "name": "requester_display_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "patient_ids": {
+          "name": "patient_ids",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "resource_types_included": {
+          "name": "resource_types_included",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "record_count": {
+          "name": "record_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "justification": {
+          "name": "justification",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.pseudonym_mapping": {
+      "name": "pseudonym_mapping",
+      "schema": "",
+      "columns": {
+        "pseudonym_id": {
+          "name": "pseudonym_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "real_patient_id": {
+          "name": "real_patient_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {
+    "public.deid_method": {
+      "name": "deid_method",
+      "schema": "public",
+      "values": [
+        "safe_harbor",
+        "limited_dataset",
+        "pseudonymized"
+      ]
+    },
+    "public.disclosure_action": {
+      "name": "disclosure_action",
+      "schema": "public",
+      "values": [
+        "export",
+        "reidentify"
+      ]
+    }
+  },
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

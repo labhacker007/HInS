@@ -1,6 +1,6 @@
 # HInS Platform Blueprint
 
-**Project Development & Requirements Document · v0.5**
+**Project Development & Requirements Document · v0.6**
 Status: Draft — decisions in progress · Scope: India + US, dual-jurisdiction · Last updated: 2026-10-15
 
 A modular, API-first, AI-native hospital operating system — architecture, compliance
@@ -36,6 +36,8 @@ Claude artifact: https://claude.ai/artifact/3NRZUR3SC5GoVQi3K1jWSw
 **Simplification carried into the MVP, not hidden:** both the clinician's "record consent" and the patient's "grant consent" actions write a consent grant directly, immediately. A real ABDM flow routes a data-sharing request through the patient's own consent-manager app for approval first (§04.2) — that approval round trip isn't built; see §16. The MVP's patient-side "revoke anytime" behavior (§04.5) is real and fully tested, independent of that gap.
 
 | 2026-10-15 | **Demo data seeded with real coded clinical data** (`scripts/seed/`): six patients across departments, a second clinician login, `Condition` resources coded with SNOMED CT + ICD-10, lab `Observation`s coded with LOINC + UCUM units, and a standing `treatment_authorization` consent on file for every patient | Makes §03.6's "coded, not free-text, wherever a terminology exists" principle visible and testable rather than only written down. Codes used are well-known, publicly documented ones (the same used throughout HL7's own FHIR spec examples) — **this is not the same as a licensed terminology server being integrated**; §03.5/§03.6's SNOMED CT India affiliate license and HAPI FHIR terminology server are still open, unbuilt items. Medications stay text-only on purpose: no drug terminology (RxNorm/India Drug Extension) is integrated, and a fabricated code would be a worse bug than none. Full detail, including what "every patient has a consent on file" does and doesn't mean for DPDP/HIPAA compliance, is in `scripts/seed/README.md` — read it before citing this seed data as evidence of compliance. |
+
+| 2026-10-15 | **De-identification / data exposure service built** (`services/deid-service`, blueprint §11) — 3 distinct, named methods: `safe_harbor` (HIPAA Safe Harbor, irreversible, generalized dates), `limited_dataset` (HIPAA Limited Data Set, irreversible, full dates/coarse geography), `pseudonymized` (GDPR Art. 4(5), reversible via a stored mapping, for admin/ops use) | `safe_harbor`+`purpose=research` is gated on an active research consent via the Consent Service — the two services now compose into a real control, not independent pieces. Every disclosure (not just the de-identified output) is audit-logged with the real patient IDs, matching HIPAA's accounting-of-disclosures and GDPR Art. 30 — see §15 risk register for why that audit table is itself sensitive. Verified end to end against real seeded patients: a patient without research consent is correctly skipped with a stated reason; `limited_dataset` correctly preserves full dates where `safe_harbor` doesn't (including the 90+ age-suppression rule); `reidentify` correctly recovers a `pseudonymized` pseudonym and correctly 404s on a `safe_harbor` one (proving real irreversibility, not just a label). Full scope of what this does and doesn't mean for compliance is in `services/deid-service/README.md`. |
 
 This table grows each session the plan is revisited — see §16 for decisions still open.
 
@@ -451,6 +453,14 @@ built.
   any grant is recorded. Needs a design pass: does HInS build a reference
   PHR/consent-manager app, or only implement the HIP/HIU side and integrate
   with an existing one?
+- **deid-service hardening** — `GET /audit` and the `pseudonym_mapping`
+  table are unauthenticated in the current build; both need to be
+  restricted to the `compliance_officer` role (§10.1) before this goes
+  near real data. The service also authenticates to Medplum with the
+  admin dev login rather than a proper `client_credentials` service
+  identity (`services/deid-service/src/medplumClient.ts`'s header has the
+  detail) — same underlying gap as the rest of this list's "real service
+  accounts, not shared human logins" theme.
 
 ## 17 — References
 

@@ -15,6 +15,10 @@ bots/            Medplum Bots: AI layer, consent gating (Phase 04, not scaffolde
 services/
   consent-service/       Phase 00 — owns every consent event (blueprint §04)
   terminology-service/   Phase 00 — SNOMED CT/LOINC/ICD lookups (blueprint §03.6)
+  deid-service/          De-identification / data exposure for research &
+                          admin use (blueprint §11) — see its own README
+                          for the 3 methods and what they do/don't mean
+                          re: compliance
 packages/
   shared/        TypeScript types shared across services — consent records,
                  RBAC roles — mirrors blueprint §04.1 and §10.1
