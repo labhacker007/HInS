@@ -1,6 +1,6 @@
 # HInS Platform Blueprint
 
-**Project Development & Requirements Document · v0.4**
+**Project Development & Requirements Document · v0.5**
 Status: Draft — decisions in progress · Scope: India + US, dual-jurisdiction · Last updated: 2026-10-15
 
 A modular, API-first, AI-native hospital operating system — architecture, compliance
@@ -34,6 +34,8 @@ Claude artifact: https://claude.ai/artifact/3NRZUR3SC5GoVQi3K1jWSw
 | 2026-10-15 | **Phase 01 MVP built**: one Vite + React app (`apps/web`), role-split by FHIR profile type — clinician app (patient registration, encounter notes, prescriptions, consent recording) and patient portal (records view, consent grant/revoke) | Proves the confirmed stack end to end rather than leaving it as a plan. Clinician and patient flows verified in a real browser (Playwright): sign in → register patient → add note → prescribe → record consent (clinician side); sign in → view records → grant consent → revoke it (patient side). Zero console errors in either run. The HInS Dev Medplum project, its admin client application, and a test patient login were all created via Medplum's own API (`Project/$init`, project invite) rather than requiring manual browser signup. |
 
 **Simplification carried into the MVP, not hidden:** both the clinician's "record consent" and the patient's "grant consent" actions write a consent grant directly, immediately. A real ABDM flow routes a data-sharing request through the patient's own consent-manager app for approval first (§04.2) — that approval round trip isn't built; see §16. The MVP's patient-side "revoke anytime" behavior (§04.5) is real and fully tested, independent of that gap.
+
+| 2026-10-15 | **Demo data seeded with real coded clinical data** (`scripts/seed/`): six patients across departments, a second clinician login, `Condition` resources coded with SNOMED CT + ICD-10, lab `Observation`s coded with LOINC + UCUM units, and a standing `treatment_authorization` consent on file for every patient | Makes §03.6's "coded, not free-text, wherever a terminology exists" principle visible and testable rather than only written down. Codes used are well-known, publicly documented ones (the same used throughout HL7's own FHIR spec examples) — **this is not the same as a licensed terminology server being integrated**; §03.5/§03.6's SNOMED CT India affiliate license and HAPI FHIR terminology server are still open, unbuilt items. Medications stay text-only on purpose: no drug terminology (RxNorm/India Drug Extension) is integrated, and a fabricated code would be a worse bug than none. Full detail, including what "every patient has a consent on file" does and doesn't mean for DPDP/HIPAA compliance, is in `scripts/seed/README.md` — read it before citing this seed data as evidence of compliance. |
 
 This table grows each session the plan is revisited — see §16 for decisions still open.
 

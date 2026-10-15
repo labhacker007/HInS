@@ -16,6 +16,7 @@
     "infra:logs": "docker compose -f infra/docker-compose.yml logs -f",
     "build": "npm run build -w packages/shared && npm run build --workspaces --if-present",
     "dev:consent-service": "npm run dev -w services/consent-service",
-    "dev:terminology-service": "npm run dev -w services/terminology-service"
+    "dev:terminology-service": "npm run dev -w services/terminology-service",
+    "seed:demo": "node scripts/seed/seed-demo-data.mjs"
   }
 }

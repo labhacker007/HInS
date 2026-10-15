@@ -16,10 +16,11 @@ import {
   TextInput,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import type { DocumentReference, MedicationRequest, Patient } from '@medplum/fhirtypes';
+import type { Condition, DocumentReference, MedicationRequest, Observation, Patient } from '@medplum/fhirtypes';
 import { useMedplum, useMedplumProfile } from '@medplum/react';
 import { formatHumanName, formatPatientMrn } from '../../lib/fhirFormat.js';
 import { createConsent } from '../../lib/consentApi.js';
+import { DiagnosesList, LabResultsList } from '../../components/ClinicalCoding.js';
 
 const ENCOUNTER_CLASS = {
   OPD: { system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode', code: 'AMB', display: 'ambulatory' },
@@ -33,12 +34,18 @@ export function PatientDetail() {
   const [patient, setPatient] = useState<Patient | undefined>();
   const [notes, setNotes] = useState<DocumentReference[] | undefined>();
   const [rx, setRx] = useState<MedicationRequest[] | undefined>();
+  const [conditions, setConditions] = useState<Condition[] | undefined>();
+  const [labs, setLabs] = useState<Observation[] | undefined>();
 
   const reload = useCallback(() => {
     if (!id) return;
     medplum.readResource('Patient', id).then(setPatient);
     medplum.searchResources('DocumentReference', { subject: `Patient/${id}`, _sort: '-date', _count: 20 }).then(setNotes);
     medplum.searchResources('MedicationRequest', { subject: `Patient/${id}`, _sort: '-_lastUpdated', _count: 20 }).then(setRx);
+    medplum.searchResources('Condition', { subject: `Patient/${id}`, _sort: '-_lastUpdated', _count: 20 }).then(setConditions);
+    medplum
+      .searchResources('Observation', { subject: `Patient/${id}`, category: 'laboratory', _sort: '-date', _count: 20 })
+      .then(setLabs);
   }, [medplum, id]);
 
   useEffect(reload, [reload]);
@@ -63,6 +70,8 @@ export function PatientDetail() {
       <Tabs defaultValue="notes">
         <Tabs.List>
           <Tabs.Tab value="notes">Encounter notes</Tabs.Tab>
+          <Tabs.Tab value="diagnoses">Diagnoses</Tabs.Tab>
+          <Tabs.Tab value="labs">Labs</Tabs.Tab>
           <Tabs.Tab value="rx">Prescriptions</Tabs.Tab>
           <Tabs.Tab value="consent">Consent</Tabs.Tab>
         </Tabs.List>
@@ -83,6 +92,14 @@ export function PatientDetail() {
               notes.map((n) => <NoteCard key={n.id} note={n} />)
             )}
           </Stack>
+        </Tabs.Panel>
+
+        <Tabs.Panel value="diagnoses" pt="md">
+          <DiagnosesList conditions={conditions} />
+        </Tabs.Panel>
+
+        <Tabs.Panel value="labs" pt="md">
+          <LabResultsList observations={labs} />
         </Tabs.Panel>
 
         <Tabs.Panel value="rx" pt="md">

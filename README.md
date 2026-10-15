@@ -28,6 +28,8 @@ docs/
                            a decision gets made
 scripts/
   dev-auth/      GitHub push/pull auth for this repo — see its own README
+  seed/          Demo data — patients, a second clinician, coded
+                 diagnoses/labs. See its own README.
 ```
 
 ## Prerequisites
@@ -94,6 +96,8 @@ migration, then `db:migrate` the same way as above.
 
 ```bash
 npm run dev -w apps/web    # http://localhost:5173
+npm run seed:demo          # one-time — populates patients, a second
+                            # clinician, and coded diagnoses/labs
 ```
 
 One app, role-split by who signs in — see `apps/web/README.md` for what's
