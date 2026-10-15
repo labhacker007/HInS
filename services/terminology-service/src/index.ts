@@ -9,38 +9,54 @@
  * free but still requires an NRCeS/C-DAC Pune affiliate license (§03.5) —
  * that license is held once, here, not re-negotiated per module.
  *
- * Not yet backed by a real terminology server. Next step: stand up a FHIR
- * terminology server (e.g. an Ontoserver- or HAPI-FHIR-backed $lookup/
- * $validate-code endpoint) behind this API, loaded with the licensed
- * SNOMED CT India edition, LOINC, and the confirmed ICD edition (§03.5 flags
- * ICD-10 vs. ICD-11 as still unconfirmed against the 2016 MoHFW standard).
+ * Decisions log, 2026-10-15: planned to sit in front of a HAPI FHIR
+ * (Apache-2.0) terminology server rather than hand-rolling SNOMED CT graph
+ * traversal — HAPI ships $lookup/$validate-code/$expand out of the box.
+ * Not wired up yet: that needs the actual licensed SNOMED CT India edition
+ * loaded, which isn't available in this environment. This is still a
+ * zero-dependency-beyond-Fastify stub.
  */
-import { createServer } from 'node:http';
+import Fastify from 'fastify';
+import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
+import { z } from 'zod';
 
 const PORT = Number(process.env.PORT ?? 4002);
 
-const server = createServer((req, res) => {
-  if (req.method === 'GET' && req.url === '/health') {
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ service: 'terminology-service', status: 'ok' }));
-    return;
+const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
+app.setValidatorCompiler(validatorCompiler);
+app.setSerializerCompiler(serializerCompiler);
+
+app.get(
+  '/health',
+  {
+    schema: {
+      response: { 200: z.object({ service: z.literal('terminology-service'), status: z.literal('ok') }) },
+    },
+  },
+  async () => ({ service: 'terminology-service' as const, status: 'ok' as const })
+);
+
+app.get(
+  '/lookup',
+  {
+    schema: {
+      querystring: z.object({ system: z.string(), code: z.string() }),
+      response: { 501: z.object({ error: z.string(), message: z.string() }) },
+    },
+  },
+  async (_req, reply) => {
+    reply.code(501);
+    return {
+      error: 'not_implemented',
+      message: 'No terminology server wired up yet — see docs/PLATFORM_BLUEPRINT.md §03.5/§03.6',
+    };
   }
+);
 
-  if (req.url?.startsWith('/lookup')) {
-    res.writeHead(501, { 'content-type': 'application/json' });
-    res.end(
-      JSON.stringify({
-        error: 'not_implemented',
-        message: 'No terminology server wired up yet — see docs/PLATFORM_BLUEPRINT.md §03.5/§03.6',
-      })
-    );
-    return;
-  }
-
-  res.writeHead(404, { 'content-type': 'application/json' });
-  res.end(JSON.stringify({ error: 'not_found' }));
-});
-
-server.listen(PORT, () => {
-  console.log(`terminology-service listening on :${PORT}`);
-});
+app
+  .listen({ port: PORT, host: '0.0.0.0' })
+  .then(() => app.log.info(`terminology-service listening on :${PORT}`))
+  .catch((err) => {
+    app.log.error(err);
+    process.exit(1);
+  });

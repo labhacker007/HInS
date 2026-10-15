@@ -1,54 +1,190 @@
 /**
- * Consent Service — Phase 00 scaffold.
+ * Consent Service — Phase 00.
  *
  * Owns every consent event as an immutable, append-only record
- * (docs/PLATFORM_BLUEPRINT.md §04.1). This is a skeleton: the endpoints
- * below define the intended surface but aren't backed by real storage yet.
- * Deliberately zero runtime dependencies so far — just Node's built-in
- * http module — so this runs the moment Node is installed, no npm install
- * required for the stub itself.
+ * (docs/PLATFORM_BLUEPRINT.md §04.1). Real persistence against the
+ * dedicated postgres-hins instance (infra/docker-compose.yml), via Drizzle.
  *
- * Real implementation needs, roughly in order:
- *   1. A datastore for ConsentRecord (append-only — never UPDATE, only INSERT)
- *   2. POST /consents — grant, validates purpose/scope/validity, signs the artefact
- *   3. POST /consents/:id/revoke — writes a revoke record, fans out
- *      RevocationPropagationStatus jobs per recipient (§04.3)
- *   4. GET /consents?patientId=... — active grants, for the patient portal
- *   5. ABDM HIE-CM protocol adapter (artefact exchange, §04.2)
+ * Still ahead, not here yet:
+ *   - ABDM HIE-CM protocol adapter (artefact exchange, §04.2)
+ *   - Cryptographic signing of outgoing artefacts
+ *   - A real recipient-notification worker for revocation propagation
+ *     (this service only records propagation rows as "pending" today —
+ *     nothing actually calls out to a recipient HIP/HIU yet)
  */
-import { createServer } from 'node:http';
-import type { ConsentRecord } from '@hins/shared';
+import Fastify from 'fastify';
+import {
+  serializerCompiler,
+  validatorCompiler,
+  type ZodTypeProvider,
+} from 'fastify-type-provider-zod';
+import { alias } from 'drizzle-orm/pg-core';
+import { and, desc, eq, gt, isNull, notExists } from 'drizzle-orm';
+import { z } from 'zod';
+import { db } from './db/client.js';
+import { consentRecords, revocationPropagation } from './db/schema.js';
+import {
+  ConsentRecordResponseSchema,
+  CreateConsentSchema,
+  ErrorResponseSchema,
+  ListConsentsQuerySchema,
+  RevokeConsentSchema,
+} from './schemas.js';
 
 const PORT = Number(process.env.PORT ?? 4001);
 
-const server = createServer((req, res) => {
-  if (req.method === 'GET' && req.url === '/health') {
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ service: 'consent-service', status: 'ok' }));
-    return;
-  }
+const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
+app.setValidatorCompiler(validatorCompiler);
+app.setSerializerCompiler(serializerCompiler);
 
-  if (req.url === '/consents') {
-    // Stub: real handler validates the body against ConsentRecord, persists
-    // it, and — for type "data_sharing" — kicks off the ABDM artefact flow.
-    res.writeHead(501, { 'content-type': 'application/json' });
-    res.end(
-      JSON.stringify({
-        error: 'not_implemented',
-        message: 'Consent persistence lands with Phase 00 storage — see docs/PLATFORM_BLUEPRINT.md §04.1',
+app.get(
+  '/health',
+  {
+    schema: {
+      response: { 200: z.object({ service: z.literal('consent-service'), status: z.literal('ok') }) },
+    },
+  },
+  async () => ({ service: 'consent-service' as const, status: 'ok' as const })
+);
+
+app.post(
+  '/consents',
+  {
+    schema: {
+      body: CreateConsentSchema,
+      response: { 201: ConsentRecordResponseSchema },
+    },
+  },
+  async (req, reply) => {
+    const b = req.body;
+    const [row] = await db
+      .insert(consentRecords)
+      .values({
+        type: b.type,
+        grantorPatientId: b.grantor.patientId,
+        grantorRepresentativePersonId: b.grantor.representative?.personId,
+        grantorRepresentativeRelationship: b.grantor.representative?.relationship,
+        scope: b.scope,
+        purposeCode: b.purposeCode,
+        requesterId: b.requester.id,
+        requesterDisplayName: b.requester.displayName,
+        requesterExternalRef: b.requester.externalRef,
+        validityStart: b.validity.start,
+        validityExpiry: b.validity.expiry,
+        signature: b.signature,
       })
-    );
-    return;
+      .returning();
+    reply.code(201);
+    return row;
   }
+);
 
-  res.writeHead(404, { 'content-type': 'application/json' });
-  res.end(JSON.stringify({ error: 'not_found' }));
-});
+app.get(
+  '/consents',
+  {
+    schema: {
+      querystring: ListConsentsQuerySchema,
+      response: { 200: z.array(ConsentRecordResponseSchema) },
+    },
+  },
+  async (req) => {
+    // Active grants only: an original grant (revokes IS NULL) that is still
+    // "granted", not expired, and has no later revoke row pointing at it.
+    // `r` is a distinct alias of the same table so the subquery correlates
+    // against the outer row (r.revokes = consentRecords.consentId) instead
+    // of comparing a row to itself, which would make NOT EXISTS always true.
+    const r = alias(consentRecords, 'r');
+    const hasRevoke = db
+      .select()
+      .from(r)
+      .where(eq(r.revokes, consentRecords.consentId));
 
-server.listen(PORT, () => {
-  console.log(`consent-service listening on :${PORT}`);
-});
+    return db
+      .select()
+      .from(consentRecords)
+      .where(
+        and(
+          eq(consentRecords.grantorPatientId, req.query.patientId),
+          isNull(consentRecords.revokes),
+          eq(consentRecords.status, 'granted'),
+          gt(consentRecords.validityExpiry, new Date()),
+          notExists(hasRevoke)
+        )
+      )
+      .orderBy(desc(consentRecords.createdAt));
+  }
+);
 
-// Re-exported so other modules in this service can build on the same shape
-// while storage is still unimplemented.
-export type { ConsentRecord };
+app.post(
+  '/consents/:id/revoke',
+  {
+    schema: {
+      params: z.object({ id: z.uuid() }),
+      body: RevokeConsentSchema,
+      response: {
+        200: ConsentRecordResponseSchema,
+        404: ErrorResponseSchema,
+        409: ErrorResponseSchema,
+      },
+    },
+  },
+  async (req, reply) => {
+    const [original] = await db
+      .select()
+      .from(consentRecords)
+      .where(eq(consentRecords.consentId, req.params.id))
+      .limit(1);
+
+    if (!original) {
+      reply.code(404);
+      return { error: 'not_found', message: `No consent record with id ${req.params.id}` };
+    }
+    if (original.status !== 'granted' || original.revokes !== null) {
+      reply.code(409);
+      return {
+        error: 'not_revocable',
+        message: 'Only an active original grant (status=granted, not itself a revoke) can be revoked',
+      };
+    }
+
+    const [revokeRow] = await db
+      .insert(consentRecords)
+      .values({
+        type: original.type,
+        grantorPatientId: original.grantorPatientId,
+        grantorRepresentativePersonId: original.grantorRepresentativePersonId,
+        grantorRepresentativeRelationship: original.grantorRepresentativeRelationship,
+        scope: original.scope,
+        purposeCode: original.purposeCode,
+        requesterId: original.requesterId,
+        requesterDisplayName: original.requesterDisplayName,
+        requesterExternalRef: original.requesterExternalRef,
+        validityStart: original.validityStart,
+        validityExpiry: original.validityExpiry,
+        status: 'revoked',
+        revokes: original.consentId,
+      })
+      .returning();
+
+    // Seed per-recipient propagation tracking (§04.3) — recording only; no
+    // outbound call to any recipient happens yet (see file header).
+    if (req.body.recipients.length > 0) {
+      await db.insert(revocationPropagation).values(
+        req.body.recipients.map((recipientId) => ({
+          consentId: original.consentId,
+          recipientId,
+        }))
+      );
+    }
+
+    return revokeRow;
+  }
+);
+
+app
+  .listen({ port: PORT, host: '0.0.0.0' })
+  .then(() => app.log.info(`consent-service listening on :${PORT}`))
+  .catch((err) => {
+    app.log.error(err);
+    process.exit(1);
+  });

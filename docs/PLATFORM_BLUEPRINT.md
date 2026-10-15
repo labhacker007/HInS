@@ -1,6 +1,6 @@
 # HInS Platform Blueprint
 
-**Project Development & Requirements Document · v0.2**
+**Project Development & Requirements Document · v0.3**
 Status: Draft — decisions in progress · Scope: India + US, dual-jurisdiction · Last updated: 2026-10-15
 
 A modular, API-first, AI-native hospital operating system — architecture, compliance
@@ -22,6 +22,14 @@ Claude artifact: https://claude.ai/artifact/3NRZUR3SC5GoVQi3K1jWSw
 | Date | Decision | Rationale |
 |---|---|---|
 | 2026-10-15 | EMR/EHR core: **Medplum** (Apache-2.0) | The only §07 candidate that's both permissively licensed enough to fork and a complete platform — FHIR server, React UI kit, OAuth2/SMART auth, Access Policies, and **Bots** (serverless hooks on FHIR events). Bots are the attachment point for consent gating and the voice-to-text pipeline (§08.2). |
+| 2026-10-15 | Backend runtime: **Node.js 22 LTS** (not Bun or Deno) | Matches Medplum's own runtime (Bots execute in a Node VM-context). 2026 comparisons converge on Node as the lowest-risk production default once a real DB and validation layer are in the loop — Bun's and Deno's raw-throughput edge mostly disappears, and Node has the deepest APM/observability support, which matters more than micro-benchmarks for an auditable system. |
+| 2026-10-15 | Backend framework: **Fastify 5** + Zod validation (`fastify-type-provider-zod`), for every custom HInS service | Schema-first by default — every route's request/response shape is a Zod schema, which both validates at runtime and can generate the service's OpenAPI doc. Chosen over Hono (built for edge/multi-runtime deployment, which this self-hosted, jurisdiction-pinned platform doesn't need) and bare Express (weaker TypeScript inference, maintenance-mode). Replaces the Phase 00 `node:http` stubs in consent-service and terminology-service. |
+| 2026-10-15 | ORM: **Drizzle ORM** (not Prisma) | SQL-fluent, infers types straight from the schema with no codegen step, ~10-20ms cold start vs. Prisma 7's ~90ms. Prisma's extra abstraction buys little here since the team is comfortable writing SQL and the schemas (append-only consent ledger, terminology lookups) are simple relational shapes, not deep object graphs. |
+| 2026-10-15 | Database: **two Postgres instances, not one shared one** — Medplum keeps its own `postgres:16` (vendor-tested, untouched); HInS's own services (consent-service, terminology-service, future custom services) get a dedicated `pgvector/pgvector:pg18` instance | Keeps our schema migrations from ever touching Medplum's internal one, and gets our own services current Postgres (18: async I/O, built-in `uuidv7()` — used as the primary key default on the consent ledger so audit rows sort by creation order for free) plus pgvector built in, for the embeddings/RAG work in §08 (CDSS groundedness checks, semantic search). Verified locally: pgvector 0.8.7 on Postgres 18.6, `uuidv7()` confirmed callable. |
+| 2026-10-15 | Frontend: **React 18/19 + Vite + Mantine**, via `@medplum/react` | Not a free choice once Medplum (above) is the core — `@medplum/react`'s peer deps pin React 18/19 and it's built on Mantine. Building a custom clinical UI kit from scratch to use a different frontend framework would mean re-implementing exactly what Medplum already gives away under Apache-2.0, directly against the brief's own "don't reinvent the wheel" instruction. Vite over Next.js: this is an authenticated SPA behind the API gateway, not a public site — no SSR benefit, and Vite keeps the self-hosted deployment simpler. |
+| 2026-10-15 | Terminology Service: plan to front a **HAPI FHIR** (Apache-2.0) terminology server rather than hand-rolling SNOMED CT/LOINC/ICD graph logic | HAPI FHIR ships `$lookup`/`$validate-code`/`$expand` out of the box — reusing it here is the same "don't reinvent the wheel" call as Medplum, just for terminology instead of the clinical datastore. Not wired up yet: needs the actual licensed SNOMED CT India edition loaded (§03.5), which isn't available in this environment. The service stays a Fastify stub until then. |
+
+**Build vs. buy, stated plainly for this round:** the EMR/EHR core, the frontend UI kit, the backend web framework, the ORM, and the terminology engine are all cases where an existing permissively-licensed project does the job — building any of them from scratch would be re-solving a already-solved, non-differentiating problem. The one piece of this round that *is* built from scratch is the Consent Service's actual domain logic (the DPDP/ABDM/HIPAA/ICMR rules themselves, §04) — no open-source project implements that combination, and it's HInS's real differentiator.
 
 This table grows each session the plan is revisited — see §16 for decisions still open.
 
@@ -200,8 +208,12 @@ the published artifact (§ link above) for the full architecture visual.
    Bulk `$export`, FHIR Subscriptions.
 3. **Cross-cutting services** — Identity & Access (IAM), Consent Service,
    Terminology Service, AI Gateway + Guardrails, Audit & Logging, Tenant
-   Config/White-label.
-4. **Core Clinical Engine** — Medplum FHIR datastore (HIS/EMR/EHR).
+   Config/White-label. Built as Fastify + Drizzle services (Decisions log,
+   2026-10-15) against their own dedicated Postgres instance — deliberately
+   not sharing Medplum's database (below), so our schema migrations never
+   touch Medplum's internal one.
+4. **Core Clinical Engine** — Medplum FHIR datastore (HIS/EMR/EHR), on its
+   own `postgres:16`, pinned to what Medplum ships tested against.
 5. **Domain services** — LIS, RIS/PACS, CDSS, Pharmacy/eRx, reached via an
    Integration Engine that also bridges to ERP/RCM and IoMT.
 6. **Research path** — De-identification pipeline (Safe Harbor/Expert/
@@ -243,6 +255,12 @@ the modified version is what triggers disclosure.
 | LLM guardrails | NeMo Guardrails | Apache-2.0 | permissive | Fork freely |
 | Safety classifier | Llama Guard | Llama community license | source-available, not OSI | Review Meta's acceptable-use terms before production |
 | Speech-to-text | Whisper large-v3 | MIT | permissive | Self-host freely |
+| Backend web framework — **confirmed** | Fastify 5 | MIT | permissive | Fork freely. Selected 2026-10-15 over Hono (built for edge/multi-runtime, not needed here) and Express (maintenance-mode, weaker TS inference) |
+| Schema validation | Zod 4 | MIT | permissive | Via `fastify-type-provider-zod` |
+| ORM — **confirmed** | Drizzle ORM | Apache-2.0 | permissive | Selected 2026-10-15 over Prisma — SQL-fluent, no codegen step |
+| Vector/embeddings store | pgvector | PostgreSQL License | permissive | Ships in the `pgvector/pgvector:pg18` image used for HInS's own services (§06) |
+| Frontend framework — **confirmed (not a free choice)** | React 18/19 | MIT | permissive | Pinned by `@medplum/react`'s peer deps. Selected 2026-10-15 |
+| Frontend UI kit | Mantine | MIT | permissive | Ships with `@medplum/react` — reuse it rather than adding a second component system |
 
 > **Get this reviewed before building on it.** License identification above
 > comes from public secondary sources that sometimes disagreed with each

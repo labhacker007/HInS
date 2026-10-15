@@ -9,9 +9,10 @@
 #
 # Usage:
 #   docker compose -f infra/docker-compose.yml up -d
-#   Medplum app:    http://localhost:3000  (first run prompts you to register)
-#   Medplum API:    http://localhost:8103
-#   Keycloak admin: http://localhost:8080  (admin / admin)
+#   Medplum app:      http://localhost:3000  (first run prompts you to register)
+#   Medplum API:      http://localhost:8103
+#   Keycloak admin:   http://localhost:8080  (admin / admin)
+#   HInS services DB: postgres://hins:hins@localhost:5433/hins  (pgvector enabled)
 #
 # The medplum-server block is adapted from medplum/medplum's own
 # docker-compose.full-stack.yml (https://github.com/medplum/medplum, Apache-2.0),
@@ -27,6 +28,16 @@
 #      load succeeds, take precedence over anything inside it. Fixed by
 #      bind-mounting ./medplum.config.json (deliberately near-empty — the
 #      env vars below are what actually configure the server).
+#
+# postgres-hins is a SEPARATE Postgres instance from Medplum's own, on
+# purpose (docs §06, Decisions log): our own services (consent-service,
+# terminology-service, ...) own their data independently of whatever
+# version/schema Medplum's image requires, so Medplum's postgres stays
+# pinned to the version it ships tested against (16) while our services get
+# current Postgres (18 — async I/O, UUIDv7) with pgvector built in for the
+# embeddings/RAG work in docs §08 (CDSS groundedness checks, semantic
+# search). Image is pgvector/pgvector:pg18 — the pgvector project's own
+# Postgres-18 build, not a custom Dockerfile.
 
 services:
   postgres:
@@ -51,6 +62,26 @@ services:
       - '5432:5432'
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U medplum']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-hins:
+    image: pgvector/pgvector:pg18
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=hins
+      - POSTGRES_PASSWORD=hins
+      - POSTGRES_DB=hins
+    # Postgres 18's image moved to a major-version-namespaced data layout —
+    # the single mount point is /var/lib/postgresql now, not
+    # /var/lib/postgresql/data like postgres:16 above.
+    volumes:
+      - hins-postgres-data:/var/lib/postgresql
+    ports:
+      - '5433:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U hins']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -123,3 +154,4 @@ services:
 
 volumes:
   medplum-postgres-data:
+  hins-postgres-data:
