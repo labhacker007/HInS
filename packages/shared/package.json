@@ -1,0 +1,16 @@
+{
+  "name": "@hins/shared",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared TypeScript types for HInS — consent, RBAC roles, FHIR extensions. Mirrors docs/PLATFORM_BLUEPRINT.md §04 and §10; keep both in sync.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsc -b --watch"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

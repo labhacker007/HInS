@@ -1,0 +1,19 @@
+{
+  "name": "@hins/consent-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Consent Service — docs/PLATFORM_BLUEPRINT.md §04. Owns every consent event as an immutable record; the only writer of @hins/shared's ConsentRecord.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsc -b --watch & node --watch dist/index.js",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@hins/shared": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}

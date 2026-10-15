@@ -1,0 +1,26 @@
+# Dependencies & build output
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Env / secrets — never commit real values
+.env
+.env.local
+.env.*.local
+
+# Medplum local binary storage (bind-mounted by the dev stack)
+infra/binary/
+
+# Logs
+npm-debug.log*
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/*
+!.vscode/extensions.json
+.idea/
