@@ -14,6 +14,56 @@ your profile in the HInS Dev project — not a separate flag.
   blueprint §08.2), **diagnoses** and **labs** (read-only, coded —
   see below), prescriptions (`MedicationRequest`), and a "record consent"
   action
+- Notes are **editable with full version history** — see
+  `src/components/VersionedNote.tsx`. Every edit records who made it and
+  when, visible to any clinician viewing the note; see "Edit history &
+  attribution" below for how that's actually implemented (it isn't
+  Medplum's `meta.author` — that field doesn't auto-populate and is
+  silently stripped if you try to set it yourself).
+- **Voice dictation** (`src/components/DictateButton.tsx`) on the note
+  form — dictate instead of typing, including while correcting a note.
+  **Dev/demo only**, labeled as such in the UI: see "Voice-to-text" below.
+
+## Edit history & attribution
+
+Checked directly against this running Medplum instance before building
+anything: `meta.author` is **not** set automatically on writes, and a
+client-supplied `meta.author` is silently discarded (`meta` is
+server-controlled). What Medplum *does* track correctly, confirmed the
+same way: full version history (`GET .../_history`) with a correct
+`meta.versionId`/`meta.lastUpdated` per version.
+
+So attribution lives in `DocumentReference.author` — a normal, non-`meta`
+FHIR field that persists like any other data and is preserved per-version
+in history. Every create and every edit sets it to the signed-in
+practitioner. "Last edited by X · <time>" on a note, and the full history
+list, both read from this field — not from anything Medplum infers on its
+own.
+
+Scoping, stated plainly: edit + history is built for `DocumentReference`
+(notes), not yet for `MedicationRequest` (prescriptions) — the same
+pattern would extend cleanly, it just isn't wired up. History is shown
+to clinicians only, not surfaced in the patient portal — a UX choice
+(audit trails are normally clinician/admin-facing), not a technical
+limit.
+
+## Voice-to-text
+
+**Dev/demo only — not the compliant production path**, labeled as such
+in the UI next to the dictate button. It uses the browser's native
+`SpeechRecognition` API, which in Chrome sends audio to Google's cloud
+speech service — not self-hosted. That's a direct contradiction of
+blueprint §08's own design (self-hosted Whisper by default; cloud ASR
+opt-in only, gated on a BAA). No self-hosted Whisper is running in this
+environment, so this is what's real and demonstrable today; swapping it
+for a self-hosted engine behind the AI Gateway is open work (§16).
+
+What *is* built faithfully to §08.1: no microphone access without a
+logged consent event first. Clicking dictate auto-creates a short-lived
+`recording`-type consent via the Consent Service if the patient doesn't
+already have one active — a simplification of "the clinician verbally
+confirms with the patient," not a captured e-signature, same honesty
+standard as every other simplification in this codebase.
 
 **Patient (`src/pages/patient/`)**
 - My Records — read-only view of own notes, diagnoses, labs, and

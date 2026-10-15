@@ -236,7 +236,7 @@ async function main() {
     return patient;
   }
 
-  async function addNote(patient, { setting, practitionerId, text, daysAgo = 0 }) {
+  async function addNote(patient, { setting, practitionerId, practitionerName, text, daysAgo = 0 }) {
     const when = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
     const encounter = await F.create('Encounter', {
       resourceType: 'Encounter',
@@ -258,6 +258,11 @@ async function main() {
       subject: { reference: `Patient/${patient.id}` },
       context: { encounter: [{ reference: `Encounter/${encounter.id}` }] },
       date: when.toISOString(),
+      // DocumentReference.author, not meta.author -- Medplum silently
+      // strips a client-supplied meta.author (verified directly against
+      // a running instance), so attribution has to live in a normal
+      // resource field instead. See apps/web's VersionedNote.tsx header.
+      author: [{ reference: `Practitioner/${practitionerId}`, display: practitionerName }],
       content: [{ attachment: { contentType: 'text/plain', data: Buffer.from(text).toString('base64') } }],
     });
     return encounter;
@@ -321,7 +326,7 @@ async function main() {
     console.log(`  Reusing login-linked Patient/${ashaLogin.id} — Asha Verma (General Medicine)`);
     const enc1 = await addNote(ashaLogin, {
       setting: 'OPD',
-      practitionerId: adminPractitionerId,
+      practitionerId: adminPractitionerId, practitionerName: 'Medplum Admin',
       text: 'Chief complaint: fatigue and occasional palpitations.\nExam: BP 128/82, HR 88, regular. No acute distress.\nAssessment: likely benign palpitations, rule out anemia.\nPlan: CBC and thyroid panel, follow up in 2 weeks.',
       daysAgo: 6,
     });
@@ -329,14 +334,14 @@ async function main() {
     await addLabResult(ashaLogin, { labKey: 'hemoglobin', value: 11.2, encounter: enc1, daysAgo: 5 });
     await addNote(ashaLogin, {
       setting: 'OPD',
-      practitionerId: sharmaId,
+      practitionerId: sharmaId, practitionerName: 'Dr. Priya Sharma',
       text: 'Cardiology follow-up. CBC/thyroid panel unremarkable. ECG normal sinus rhythm.\nAssessment: palpitations likely stress-related.\nPlan: lifestyle counseling, reduce caffeine, return if symptoms recur.',
       daysAgo: 1,
     });
     await addRx(ashaLogin, {
       medication: 'Ferrous sulfate 325mg',
       dosage: '1 tablet daily with food for 4 weeks',
-      practitionerId: adminPractitionerId,
+      practitionerId: adminPractitionerId, practitionerName: 'Medplum Admin',
       daysAgo: 6,
     });
     await addTreatmentConsent(ashaLogin.id, { department: 'General Medicine' });
@@ -353,21 +358,21 @@ async function main() {
   }
 
   const ramesh = await registerPatient({ given: 'Ramesh', family: 'Iyer', birthDate: '1965-03-22', gender: 'male', phone: '+91-98765-43210', department: 'Cardiology' });
-  const rameshEnc = await addNote(ramesh, { setting: 'IPD', practitionerId: sharmaId, text: 'Admitted for hypertensive urgency, BP 182/110 on arrival.\nStarted on IV labetalol, responded well.\nPlan: transition to oral antihypertensives, discharge tomorrow if stable overnight.', daysAgo: 3 });
+  const rameshEnc = await addNote(ramesh, { setting: 'IPD', practitionerId: sharmaId, practitionerName: 'Dr. Priya Sharma', text: 'Admitted for hypertensive urgency, BP 182/110 on arrival.\nStarted on IV labetalol, responded well.\nPlan: transition to oral antihypertensives, discharge tomorrow if stable overnight.', daysAgo: 3 });
   await addCondition(ramesh, { conditionKey: 'hypertension', encounter: rameshEnc, daysAgo: 3 });
-  await addRx(ramesh, { medication: 'Amlodipine 5mg', dosage: '1 tablet once daily', practitionerId: sharmaId, daysAgo: 2 });
-  await addRx(ramesh, { medication: 'Losartan 50mg', dosage: '1 tablet once daily', practitionerId: sharmaId, daysAgo: 2 });
+  await addRx(ramesh, { medication: 'Amlodipine 5mg', dosage: '1 tablet once daily', practitionerId: sharmaId, practitionerName: 'Dr. Priya Sharma', daysAgo: 2 });
+  await addRx(ramesh, { medication: 'Losartan 50mg', dosage: '1 tablet once daily', practitionerId: sharmaId, practitionerName: 'Dr. Priya Sharma', daysAgo: 2 });
 
   const fatima = await registerPatient({ given: 'Fatima', family: 'Sheikh', birthDate: '1988-11-02', gender: 'female', phone: '+91-98123-45678', department: 'OB-GYN' });
-  await addNote(fatima, { setting: 'OPD', practitionerId: adminPractitionerId, text: 'Routine prenatal visit, 28 weeks.\nFundal height appropriate for dates. Fetal heart rate 142 bpm.\nPlan: glucose tolerance test, continue prenatal vitamins, next visit in 2 weeks.', daysAgo: 4 });
+  await addNote(fatima, { setting: 'OPD', practitionerId: adminPractitionerId, practitionerName: 'Medplum Admin', text: 'Routine prenatal visit, 28 weeks.\nFundal height appropriate for dates. Fetal heart rate 142 bpm.\nPlan: glucose tolerance test, continue prenatal vitamins, next visit in 2 weeks.', daysAgo: 4 });
 
   const arjun = await registerPatient({ given: 'Arjun', family: 'Nair', birthDate: '2015-07-19', gender: 'male', phone: '+91-99887-76655', department: 'Pediatrics' });
-  const arjunEnc = await addNote(arjun, { setting: 'OPD', practitionerId: adminPractitionerId, text: 'Presented with fever (101.8F) and sore throat for 2 days.\nRapid strep test positive.\nPlan: amoxicillin course, fluids, rest, follow up if no improvement in 48h.', daysAgo: 1 });
+  const arjunEnc = await addNote(arjun, { setting: 'OPD', practitionerId: adminPractitionerId, practitionerName: 'Medplum Admin', text: 'Presented with fever (101.8F) and sore throat for 2 days.\nRapid strep test positive.\nPlan: amoxicillin course, fluids, rest, follow up if no improvement in 48h.', daysAgo: 1 });
   await addCondition(arjun, { conditionKey: 'fever', encounter: arjunEnc, daysAgo: 1 });
-  await addRx(arjun, { medication: 'Amoxicillin 250mg/5mL suspension', dosage: '5mL twice daily for 10 days', practitionerId: adminPractitionerId, daysAgo: 1 });
+  await addRx(arjun, { medication: 'Amoxicillin 250mg/5mL suspension', dosage: '5mL twice daily for 10 days', practitionerId: adminPractitionerId, practitionerName: 'Medplum Admin', daysAgo: 1 });
 
   const grace = await registerPatient({ given: 'Grace', family: 'Thompson', birthDate: '1972-09-30', gender: 'female', phone: '+1-555-0142', department: 'Oncology' });
-  await addNote(grace, { setting: 'OPD', practitionerId: adminPractitionerId, text: 'Oncology follow-up, 6 months post-treatment.\nNo new symptoms. Recent imaging shows no recurrence.\nPlan: continue surveillance, next scan in 6 months.', daysAgo: 10 });
+  await addNote(grace, { setting: 'OPD', practitionerId: adminPractitionerId, practitionerName: 'Medplum Admin', text: 'Oncology follow-up, 6 months post-treatment.\nNo new symptoms. Recent imaging shows no recurrence.\nPlan: continue surveillance, next scan in 6 months.', daysAgo: 10 });
   await createConsent({
     type: 'research',
     grantorPatientId: grace.id,
@@ -379,11 +384,11 @@ async function main() {
   });
 
   const suresh = await registerPatient({ given: 'Suresh', family: 'Patel', birthDate: '1955-01-15', gender: 'male', phone: '+91-98234-56789', department: 'Nephrology' });
-  const sureshEnc = await addNote(suresh, { setting: 'IPD', practitionerId: adminPractitionerId, text: 'Admitted for fluid overload, creatinine 4.2 (baseline 3.8).\nStarted on dialysis, tolerated well.\nPlan: continue scheduled hemodialysis 3x/week, nephrology to follow.', daysAgo: 2 });
+  const sureshEnc = await addNote(suresh, { setting: 'IPD', practitionerId: adminPractitionerId, practitionerName: 'Medplum Admin', text: 'Admitted for fluid overload, creatinine 4.2 (baseline 3.8).\nStarted on dialysis, tolerated well.\nPlan: continue scheduled hemodialysis 3x/week, nephrology to follow.', daysAgo: 2 });
   await addCondition(suresh, { conditionKey: 'ckd', encounter: sureshEnc, daysAgo: 2 });
   await addLabResult(suresh, { labKey: 'creatinine', value: 4.2, encounter: sureshEnc, daysAgo: 2 });
   await addLabResult(suresh, { labKey: 'potassium', value: 5.1, encounter: sureshEnc, daysAgo: 2 });
-  await addRx(suresh, { medication: 'Sevelamer 800mg', dosage: '1 tablet with meals', practitionerId: adminPractitionerId, daysAgo: 2 });
+  await addRx(suresh, { medication: 'Sevelamer 800mg', dosage: '1 tablet with meals', practitionerId: adminPractitionerId, practitionerName: 'Medplum Admin', daysAgo: 2 });
 
   console.log('\nDone. Summary:');
   console.log(`  Practitioners: Medplum Admin (admin@example.com), Dr. Priya Sharma (dr.sharma@stjones.example / DrSharma123!)`);

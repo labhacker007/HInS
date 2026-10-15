@@ -5,7 +5,6 @@ import {
   Group,
   Title,
   Text,
-  Badge,
   Paper,
   Textarea,
   Select,
@@ -21,6 +20,8 @@ import { useMedplum, useMedplumProfile } from '@medplum/react';
 import { formatHumanName, formatPatientMrn } from '../../lib/fhirFormat.js';
 import { createConsent } from '../../lib/consentApi.js';
 import { DiagnosesList, LabResultsList } from '../../components/ClinicalCoding.js';
+import { VersionedNote } from '../../components/VersionedNote.js';
+import { DictateButton } from '../../components/DictateButton.js';
 
 const ENCOUNTER_CLASS = {
   OPD: { system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode', code: 'AMB', display: 'ambulatory' },
@@ -80,6 +81,7 @@ export function PatientDetail() {
           <NewNoteForm
             patientId={id}
             practitionerId={profile?.id}
+            practitionerName={formatHumanName(profile?.name)}
             onCreated={reload}
           />
           <Divider my="md" />
@@ -89,7 +91,7 @@ export function PatientDetail() {
             ) : notes.length === 0 ? (
               <Text c="dimmed">No notes yet.</Text>
             ) : (
-              notes.map((n) => <NoteCard key={n.id} note={n} />)
+              notes.map((n) => <VersionedNote key={n.id} note={n} onSaved={reload} />)
             )}
           </Stack>
         </Tabs.Panel>
@@ -131,37 +133,25 @@ export function PatientDetail() {
   );
 }
 
-function NoteCard({ note }: { note: DocumentReference }) {
-  const data = note.content?.[0]?.attachment?.data;
-  const text = data ? atob(data) : '(empty)';
-  return (
-    <Paper withBorder p="sm">
-      <Group justify="space-between" mb={4}>
-        <Badge size="sm" variant="light">
-          {note.type?.text ?? 'Note'}
-        </Badge>
-        <Text size="xs" c="dimmed">
-          {note.date?.slice(0, 16).replace('T', ' ')}
-        </Text>
-      </Group>
-      <Text style={{ whiteSpace: 'pre-wrap' }}>{text}</Text>
-    </Paper>
-  );
-}
-
 function NewNoteForm({
   patientId,
   practitionerId,
+  practitionerName,
   onCreated,
 }: {
   patientId: string;
   practitionerId: string | undefined;
+  practitionerName: string;
   onCreated: () => void;
 }) {
   const medplum = useMedplum();
   const [setting, setSetting] = useState<'OPD' | 'IPD'>('OPD');
   const [text, setText] = useState('');
   const [saving, setSaving] = useState(false);
+
+  function appendDictated(chunk: string) {
+    setText((prev) => (prev ? `${prev} ${chunk}` : chunk));
+  }
 
   async function handleSave() {
     if (!text.trim()) return;
@@ -184,6 +174,9 @@ function NewNoteForm({
         subject: { reference: `Patient/${patientId}` },
         context: { encounter: [{ reference: `Encounter/${encounter.id}` }] },
         date: new Date().toISOString(),
+        // DocumentReference.author, not meta.author — see
+        // VersionedNote.tsx's header on why that distinction matters.
+        author: practitionerId ? [{ reference: `Practitioner/${practitionerId}`, display: practitionerName }] : undefined,
         content: [{ attachment: { contentType: 'text/plain', data: btoa(text) } }],
       });
       setText('');
@@ -198,7 +191,7 @@ function NewNoteForm({
 
   return (
     <Stack gap="xs">
-      <Group>
+      <Group justify="space-between">
         <Select
           label="Setting"
           data={[
@@ -208,6 +201,12 @@ function NewNoteForm({
           value={setting}
           onChange={(v) => setSetting((v as 'OPD' | 'IPD') ?? 'OPD')}
           w={180}
+        />
+        <DictateButton
+          patientId={patientId}
+          requesterId={practitionerId}
+          requesterName={practitionerName}
+          onTranscript={appendDictated}
         />
       </Group>
       <Textarea

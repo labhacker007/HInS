@@ -1,6 +1,6 @@
 # HInS Platform Blueprint
 
-**Project Development & Requirements Document · v0.6**
+**Project Development & Requirements Document · v0.7**
 Status: Draft — decisions in progress · Scope: India + US, dual-jurisdiction · Last updated: 2026-10-15
 
 A modular, API-first, AI-native hospital operating system — architecture, compliance
@@ -38,6 +38,9 @@ Claude artifact: https://claude.ai/artifact/3NRZUR3SC5GoVQi3K1jWSw
 | 2026-10-15 | **Demo data seeded with real coded clinical data** (`scripts/seed/`): six patients across departments, a second clinician login, `Condition` resources coded with SNOMED CT + ICD-10, lab `Observation`s coded with LOINC + UCUM units, and a standing `treatment_authorization` consent on file for every patient | Makes §03.6's "coded, not free-text, wherever a terminology exists" principle visible and testable rather than only written down. Codes used are well-known, publicly documented ones (the same used throughout HL7's own FHIR spec examples) — **this is not the same as a licensed terminology server being integrated**; §03.5/§03.6's SNOMED CT India affiliate license and HAPI FHIR terminology server are still open, unbuilt items. Medications stay text-only on purpose: no drug terminology (RxNorm/India Drug Extension) is integrated, and a fabricated code would be a worse bug than none. Full detail, including what "every patient has a consent on file" does and doesn't mean for DPDP/HIPAA compliance, is in `scripts/seed/README.md` — read it before citing this seed data as evidence of compliance. |
 
 | 2026-10-15 | **De-identification / data exposure service built** (`services/deid-service`, blueprint §11) — 3 distinct, named methods: `safe_harbor` (HIPAA Safe Harbor, irreversible, generalized dates), `limited_dataset` (HIPAA Limited Data Set, irreversible, full dates/coarse geography), `pseudonymized` (GDPR Art. 4(5), reversible via a stored mapping, for admin/ops use) | `safe_harbor`+`purpose=research` is gated on an active research consent via the Consent Service — the two services now compose into a real control, not independent pieces. Every disclosure (not just the de-identified output) is audit-logged with the real patient IDs, matching HIPAA's accounting-of-disclosures and GDPR Art. 30 — see §15 risk register for why that audit table is itself sensitive. Verified end to end against real seeded patients: a patient without research consent is correctly skipped with a stated reason; `limited_dataset` correctly preserves full dates where `safe_harbor` doesn't (including the 90+ age-suppression rule); `reidentify` correctly recovers a `pseudonymized` pseudonym and correctly 404s on a `safe_harbor` one (proving real irreversibility, not just a label). Full scope of what this does and doesn't mean for compliance is in `services/deid-service/README.md`. |
+
+| 2026-10-15 | **Note editing with full version history**, and a real attribution mechanism found for it | Checked directly against the running Medplum instance before building anything: `meta.author` is not auto-populated on writes, and a client-supplied `meta.author` is silently discarded (`meta` is server-controlled) — confirmed the same way that `_history` with `meta.versionId`/`lastUpdated` per version works correctly. Attribution instead lives in `DocumentReference.author`, a normal FHIR field that persists like any data and is preserved per-version in history. Every create/edit sets it to the signed-in practitioner. Built for notes only; `MedicationRequest` editing isn't wired up yet (§16). History is clinician-facing only, not shown in the patient portal — a UX choice, not a limit. |
+| 2026-10-15 | **Voice dictation added, explicitly dev/demo only** | Uses the browser's native `SpeechRecognition` API — in Chrome, that sends audio to Google's cloud speech service, directly contradicting §08's self-hosted-by-default design. No self-hosted Whisper is running in this environment; this is what's real and demonstrable today, labeled as such in the UI next to the button, not quietly shipped as if compliant. What *is* built faithfully to §08.1: no microphone access without a logged `recording`-type consent first (auto-created via the Consent Service if none is active) — a verbal-confirmation simplification, not a captured e-signature, same as every other documented simplification in this codebase. |
 
 This table grows each session the plan is revisited — see §16 for decisions still open.
 
@@ -461,6 +464,19 @@ built.
   identity (`services/deid-service/src/medplumClient.ts`'s header has the
   detail) — same underlying gap as the rest of this list's "real service
   accounts, not shared human logins" theme.
+- **"Fully EHR/EMR"** — explicitly not attempted in this round, said
+  plainly rather than implied done: scheduling, bed/ward management, and
+  full order workflows (beyond notes/eRx) are still unbuilt Phase 01
+  items (§13). What this round added was depth on what already existed —
+  edit/version history and voice dictation on the clinical documentation
+  flow — not new breadth.
+- **Editable `MedicationRequest`** — notes got full edit + version
+  history (§05, Decisions log above); prescriptions didn't. Same pattern
+  would extend cleanly, just not wired up yet.
+- **Voice-to-text production path** — swap the dev-only browser
+  `SpeechRecognition` dictation for a self-hosted Whisper call behind the
+  AI Gateway, per §08's actual design, before any real patient data goes
+  near it.
 
 ## 17 — References
 
