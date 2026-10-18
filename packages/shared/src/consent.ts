@@ -15,7 +15,11 @@ export type ConsentType =
   | 'recording' // Voice/video capture during an encounter (§08.1)
   | 'marketing';
 
-export type ConsentStatus = 'granted' | 'revoked' | 'expired';
+/** 'pending' = a clinician-initiated request awaiting the patient's own
+ * approve/deny decision (§04.2/§16 "Consent approval round trip"); a
+ * denied request reuses 'revoked' rather than a separate terminal value —
+ * see services/consent-service/src/db/schema.ts for the reasoning. */
+export type ConsentStatus = 'granted' | 'revoked' | 'expired' | 'pending';
 
 /** DPDP/ABDM purpose binding — a request must declare one of these. */
 export type ConsentPurpose = 'self_use' | 'treatment' | 'payment' | 'research';

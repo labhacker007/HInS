@@ -3,7 +3,14 @@ import { Stack, Title, Text, Button, Loader, Divider, TextInput, MultiSelect, Se
 import { notifications } from '@mantine/notifications';
 import type { ConsentPurpose, ConsentType } from '@hins/shared';
 import { useMedplumProfile } from '@medplum/react';
-import { createConsent, listConsentHistory, revokeConsent, type ConsentApiRecord } from '../../lib/consentApi.js';
+import {
+  approveConsent,
+  createConsent,
+  denyConsent,
+  listConsentHistory,
+  revokeConsent,
+  type ConsentApiRecord,
+} from '../../lib/consentApi.js';
 import { ConsentHistoryList } from '../../components/ConsentHistoryList.js';
 
 const SCOPE_OPTIONS = ['OPDRecord', 'LabReport', 'Prescription', 'DischargeSummary', 'Imaging'];
@@ -21,6 +28,7 @@ export function MyConsents() {
   const profile = useMedplumProfile();
   const [consents, setConsents] = useState<ConsentApiRecord[] | undefined>();
   const [revokingId, setRevokingId] = useState<string | undefined>();
+  const [decidingId, setDecidingId] = useState<string | undefined>();
 
   const reload = useCallback(() => {
     if (!profile?.id) return;
@@ -42,6 +50,35 @@ export function MyConsents() {
     }
   }
 
+  // §04.2/§16: a clinician-initiated request shows up here as "Pending
+  // approval" — approving it is the patient's own decision, the real
+  // round trip the blueprint's §16 open decision called for.
+  async function handleApprove(consentId: string) {
+    setDecidingId(consentId);
+    try {
+      await approveConsent(consentId);
+      notifications.show({ message: 'Consent approved', color: 'green' });
+      reload();
+    } catch (err) {
+      notifications.show({ message: String(err), color: 'red' });
+    } finally {
+      setDecidingId(undefined);
+    }
+  }
+
+  async function handleDeny(consentId: string) {
+    setDecidingId(consentId);
+    try {
+      await denyConsent(consentId);
+      notifications.show({ message: 'Consent request denied', color: 'gray' });
+      reload();
+    } catch (err) {
+      notifications.show({ message: String(err), color: 'red' });
+    } finally {
+      setDecidingId(undefined);
+    }
+  }
+
   return (
     <Stack maw={640}>
       <Title order={3}>My Consents</Title>
@@ -53,7 +90,14 @@ export function MyConsents() {
       {consents === undefined ? (
         <Loader size="sm" />
       ) : (
-        <ConsentHistoryList history={consents} onRevoke={handleRevoke} revokingId={revokingId} />
+        <ConsentHistoryList
+          history={consents}
+          onRevoke={handleRevoke}
+          revokingId={revokingId}
+          onApprove={handleApprove}
+          onDeny={handleDeny}
+          decidingId={decidingId}
+        />
       )}
 
       <Divider my="sm" />

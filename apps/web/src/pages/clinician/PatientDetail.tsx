@@ -305,8 +305,9 @@ function RequestConsentPanel({
         requesterDisplayName: requesterName,
         validityStart: start.toISOString(),
         validityExpiry: expiry.toISOString(),
+        requiresApproval: true,
       });
-      notifications.show({ message: 'Consent recorded for this patient', color: 'green' });
+      notifications.show({ message: 'Consent request sent — awaiting the patient’s approval', color: 'yellow' });
       reload();
     } catch (err) {
       notifications.show({ message: String(err), color: 'red' });
@@ -319,14 +320,16 @@ function RequestConsentPanel({
     <Stack maw={560}>
       <div>
         <Text size="sm" c="dimmed" mb="xs">
-          Blueprint §04.2: in production, this would route through the patient's own
-          consent-manager app for approval, not write the grant directly — that
-          approval round trip isn't built yet (§16 open decisions). This button
-          records a 30-day treatment-purpose consent grant directly, so the
-          patient can see and revoke it from their own portal.
+          Blueprint §04.2: this creates a 30-day treatment-purpose data-sharing
+          <strong> request</strong>, not an immediate grant — it lands in the
+          patient's own portal as "Pending approval" and only becomes active once
+          they approve it there (§16's "Consent approval round trip" is now built,
+          HIP/HIU side only — see services/consent-service/src/index.ts's header
+          for what's still a real external Consent Manager app vs. this in-app
+          round trip).
         </Text>
         <Button onClick={handleRequest} loading={sending} disabled={!requesterId}>
-          Record 30-day data-sharing consent
+          Request 30-day data-sharing consent
         </Button>
       </div>
 

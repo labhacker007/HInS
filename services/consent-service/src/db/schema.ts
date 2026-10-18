@@ -12,6 +12,19 @@
  * consentId defaults to Postgres 18's built-in uuidv7() — time-ordered, so
  * rows in this audit-relevant table sort by creation order without a
  * separate timestamp index.
+ *
+ * Append-only, with one narrow, documented exception (blueprint §04.2/§16
+ * "Consent approval round trip"): a `status='pending'` row created by a
+ * clinician-initiated request (POST /consents with requiresApproval=true)
+ * has never been an effective grant — nothing has been shared and no
+ * access has occurred under it — so its approve/deny transition is done
+ * as a single UPDATE of that same row (status, and validityStart on
+ * approve) rather than an INSERT of a new row. Every other status
+ * transition in this service (revoke) still only ever INSERTs a new row
+ * that points back via `revokes`, per the comment above. If this ever
+ * needs a full chain-of-custody audit trail for the pending state itself
+ * (e.g. "who denied it and when" beyond the one `statusNote` column),
+ * revisit this and move to an insert-based chain instead.
  */
 import { pgTable, pgEnum, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
@@ -24,7 +37,11 @@ export const consentTypeEnum = pgEnum('consent_type', [
   'marketing',
 ]);
 
-export const consentStatusEnum = pgEnum('consent_status', ['granted', 'revoked', 'expired']);
+// 'pending' = a clinician-initiated request awaiting the patient's own
+// approve/deny decision (§04.2); a denied request reuses 'revoked' (with
+// `statusNote` set) rather than a separate terminal value - see §16 and
+// this file's header comment for the reasoning.
+export const consentStatusEnum = pgEnum('consent_status', ['granted', 'revoked', 'expired', 'pending']);
 
 export const consentPurposeEnum = pgEnum('consent_purpose', [
   'self_use',
@@ -61,6 +78,10 @@ export const consentRecords = pgTable('consent_records', {
 
   // Set only on a revoke row; points back at the consentId it supersedes.
   revokes: uuid('revokes'),
+
+  // Free-text note on the pending->denied transition (reuses 'revoked'
+  // status - see above). Not used for any other transition today.
+  statusNote: text('status_note'),
 
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });

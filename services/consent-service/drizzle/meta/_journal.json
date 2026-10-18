@@ -8,6 +8,13 @@
       "when": 1792070954088,
       "tag": "0000_lethal_ultimo",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792344901888,
+      "tag": "0001_overjoyed_solo",
+      "breakpoints": true
     }
   ]
 }
