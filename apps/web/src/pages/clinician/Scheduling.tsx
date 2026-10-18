@@ -24,6 +24,13 @@ import { formatHumanName, formatPatientMrn } from '../../lib/fhirFormat.js';
  * Appointment doesn't get the same full edit+version-history UI as
  * notes/prescriptions in this round — a plain status update is enough
  * for this slice (§16 scoping note in this task).
+ *
+ * Double-booking: handleBook() below checks the selected PRACTITIONER's
+ * existing non-cancelled appointments for a time overlap before booking
+ * (see appointmentsOverlap()). Scoped to practitioner-conflict only —
+ * same-PATIENT double-booking (one patient booked into two overlapping
+ * slots with different practitioners) is NOT checked. Known gap, not
+ * hidden: see §16.
  */
 
 const DURATIONS = [
@@ -53,6 +60,27 @@ const STATUS_COLOR: Record<string, string> = {
 function participantDisplay(appt: Appointment, type: 'Patient' | 'Practitioner'): string {
   const p = appt.participant?.find((pp) => pp.actor?.reference?.startsWith(`${type}/`));
   return p?.actor?.display ?? p?.actor?.reference ?? '—';
+}
+
+/**
+ * Pure overlap check, no FHIR/React/browser dependency — unit-testable
+ * on its own (see the standalone verification script referenced in this
+ * change's commit message). Half-open interval semantics [start, end):
+ * an appointment ending exactly when another starts is NOT an overlap
+ * (back-to-back slots are allowed), matching how calendars normally work.
+ * Accepts ISO date strings or Date objects for either range.
+ */
+export function appointmentsOverlap(
+  existingStart: string | Date,
+  existingEnd: string | Date,
+  proposedStart: string | Date,
+  proposedEnd: string | Date
+): boolean {
+  const es = new Date(existingStart).getTime();
+  const ee = new Date(existingEnd).getTime();
+  const ps = new Date(proposedStart).getTime();
+  const pe = new Date(proposedEnd).getTime();
+  return es < pe && ps < ee;
 }
 
 export function Scheduling() {
@@ -204,6 +232,40 @@ function BookAppointmentForm({
       const start = new Date(when);
       const end = new Date(start.getTime() + Number(duration) * 60_000);
       const practitioner = practitioners?.find((p) => p.id === practitionerId);
+
+      // Double-booking check (practitioner-conflict only, see header comment).
+      // Fetch is widened a day on each side of the proposed slot — the FHIR
+      // `date` param here is only a coarse server-side narrowing filter;
+      // appointmentsOverlap() below is the real, precise [start,end) check,
+      // so a timezone mismatch between browser and server in the day
+      // boundary can't hide a real conflict, only (harmlessly) fetch a
+      // few extra rows.
+      const dayBefore = new Date(start.getFullYear(), start.getMonth(), start.getDate() - 1);
+      const dayAfterEnd = new Date(end.getFullYear(), end.getMonth(), end.getDate() + 2);
+      const toDateParam = (d: Date) =>
+        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const existingForPractitioner = await medplum.searchResources('Appointment', [
+        ['actor', `Practitioner/${practitionerId}`],
+        ['date', `ge${toDateParam(dayBefore)}`],
+        ['date', `lt${toDateParam(dayAfterEnd)}`],
+        ['status:not', 'cancelled'],
+        ['_count', '100'],
+      ]);
+      const conflict = existingForPractitioner.find(
+        (appt) => appt.start && appt.end && appointmentsOverlap(appt.start, appt.end, start, end)
+      );
+      if (conflict) {
+        const conflictPatient = participantDisplay(conflict, 'Patient');
+        const conflictWhen = conflict.start ? conflict.start.slice(0, 16).replace('T', ' ') : 'an existing slot';
+        notifications.show({
+          message:
+            `${practitioner ? formatHumanName(practitioner.name) : 'This practitioner'} already has an appointment ` +
+            `at ${conflictWhen}${conflictPatient !== '—' ? ` with ${conflictPatient}` : ''}. Pick a different time.`,
+          color: 'red',
+        });
+        return;
+      }
+
       await medplum.createResource({
         resourceType: 'Appointment',
         status: 'booked',
