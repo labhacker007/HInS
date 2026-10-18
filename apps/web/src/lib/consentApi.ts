@@ -26,9 +26,10 @@ export interface ConsentApiRecord {
   requesterExternalRef: string | null;
   validityStart: string;
   validityExpiry: string;
-  status: 'granted' | 'revoked' | 'expired';
+  status: 'granted' | 'revoked' | 'expired' | 'pending';
   signature: string | null;
   revokes: string | null;
+  statusNote: string | null;
   createdAt: string;
 }
 
@@ -55,6 +56,13 @@ export interface CreateConsentInput {
   requesterDisplayName: string;
   validityStart: string;
   validityExpiry: string;
+  /** §04.2/§16: true for a clinician-initiated request — creates the
+   * record as status='pending' instead of an immediate 'granted', so it
+   * only becomes active once the patient calls approveConsent(). Omit (or
+   * pass false) for a patient granting their own consent directly — see
+   * services/consent-service/src/schemas.ts's CreateConsentSchema comment
+   * for the full rationale. */
+  requiresApproval?: boolean;
 }
 
 export function listActiveConsents(patientId: string): Promise<ConsentApiRecord[]> {
@@ -79,6 +87,7 @@ export function createConsent(input: CreateConsentInput): Promise<ConsentApiReco
       purposeCode: input.purposeCode,
       requester: { id: input.requesterId, displayName: input.requesterDisplayName },
       validity: { start: input.validityStart, expiry: input.validityExpiry },
+      requiresApproval: input.requiresApproval ?? false,
     }),
   });
 }
@@ -88,4 +97,17 @@ export function revokeConsent(consentId: string, recipients: string[] = []): Pro
     method: 'POST',
     body: JSON.stringify({ recipients }),
   });
+}
+
+/** Patient-only: approves a status='pending' request, transitioning it to
+ * 'granted' (§04.2/§16). 409s if the record isn't pending. */
+export function approveConsent(consentId: string): Promise<ConsentApiRecord> {
+  return request(`/consents/${consentId}/approve`, { method: 'POST', body: JSON.stringify({}) });
+}
+
+/** Patient-only: denies a status='pending' request — a terminal state
+ * that reuses 'revoked' with `statusNote` set (see schema.ts for why).
+ * 409s if the record isn't pending. */
+export function denyConsent(consentId: string, note?: string): Promise<ConsentApiRecord> {
+  return request(`/consents/${consentId}/deny`, { method: 'POST', body: JSON.stringify({ note }) });
 }

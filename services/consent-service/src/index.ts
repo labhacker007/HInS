@@ -5,9 +5,18 @@
  * (docs/PLATFORM_BLUEPRINT.md §04.1). Real persistence against the
  * dedicated postgres-hins instance (infra/docker-compose.yml), via Drizzle.
  *
- * Still ahead, not here yet:
- *   - ABDM HIE-CM protocol adapter (artefact exchange, §04.2)
- *   - Cryptographic signing of outgoing artefacts
+ * A clinician-initiated request now goes through a real pending-approval
+ * state machine before it's active (POST /consents with
+ * requiresApproval=true -> status='pending' -> POST .../approve or
+ * .../deny), closing the §16 "Consent approval round trip" gap — but only
+ * the HIP/HIU side of it, within HInS itself. Still ahead, not here yet:
+ *   - A standalone/external PHR-style consent-manager app — §16 left that
+ *     as an open design question ("does HInS build a reference consent-
+ *     manager app, or only implement the HIP/HIU side") and this task
+ *     answered it by building only the HIP/HIU side, in-app.
+ *   - ABDM HIE-CM protocol adapter (artefact exchange with a *real*
+ *     external Consent Manager, §04.2) and cryptographic signing of
+ *     outgoing artefacts.
  *   - A real recipient-notification worker for revocation propagation
  *     (this service only records propagation rows as "pending" today —
  *     nothing actually calls out to a recipient HIP/HIU yet)
@@ -27,6 +36,7 @@ import { consentRecords, revocationPropagation } from './db/schema.js';
 import {
   ConsentRecordResponseSchema,
   CreateConsentSchema,
+  DecideConsentSchema,
   ErrorResponseSchema,
   ListConsentsQuerySchema,
   RevokeConsentSchema,
@@ -62,6 +72,10 @@ app.post(
   },
   async (req, reply) => {
     const b = req.body;
+    // §04.2/§16: a clinician-initiated request (requiresApproval=true)
+    // lands as 'pending' and needs the patient's own POST .../approve
+    // before it's ever active; a patient granting their own consent
+    // directly (requiresApproval omitted/false) still grants immediately.
     const [row] = await db
       .insert(consentRecords)
       .values({
@@ -77,6 +91,7 @@ app.post(
         validityStart: b.validity.start,
         validityExpiry: b.validity.expiry,
         signature: b.signature,
+        status: b.requiresApproval ? 'pending' : 'granted',
       })
       .returning();
     reply.code(201);
@@ -130,11 +145,12 @@ app.get(
   },
   async (req) => {
     // Every consent record for this patient, unfiltered — the full
-    // append-only history (active grants, revoked grants, and the
-    // original grants revoke rows supersede). Used by the "show revoked
-    // consents too" views in apps/web (both clinician and patient) — the
-    // active-only GET /consents stays as-is for places that only care
-    // about current access.
+    // history (active grants, pending requests awaiting approval, revoked/
+    // denied grants, and the original grants revoke rows supersede). Used
+    // by the "show revoked consents too" views in apps/web (both clinician
+    // and patient) — the active-only GET /consents stays as-is for places
+    // that only care about current access, and correctly excludes
+    // 'pending' rows (status !== 'granted') until they're approved.
     return db
       .select()
       .from(consentRecords)
@@ -206,6 +222,101 @@ app.post(
     }
 
     return revokeRow;
+  }
+);
+
+app.post(
+  '/consents/:id/approve',
+  {
+    schema: {
+      params: z.object({ id: z.uuid() }),
+      body: DecideConsentSchema,
+      response: {
+        200: ConsentRecordResponseSchema,
+        404: ErrorResponseSchema,
+        409: ErrorResponseSchema,
+      },
+    },
+  },
+  async (req, reply) => {
+    const [original] = await db
+      .select()
+      .from(consentRecords)
+      .where(eq(consentRecords.consentId, req.params.id))
+      .limit(1);
+
+    if (!original) {
+      reply.code(404);
+      return { error: 'not_found', message: `No consent record with id ${req.params.id}` };
+    }
+    if (original.status !== 'pending') {
+      reply.code(409);
+      return {
+        error: 'not_pending',
+        message: 'Only a record with status=pending can be approved',
+      };
+    }
+
+    // UPDATE in place, not an INSERT — see schema.ts header for why this
+    // one transition is a documented exception to the append-only ledger
+    // (a pending request was never an effective grant, so there's no
+    // history being overwritten). validityStart resets to now: the
+    // original request's proposed start is just that — a proposal — the
+    // grant only actually becomes effective once the patient approves it.
+    const [updated] = await db
+      .update(consentRecords)
+      .set({ status: 'granted', validityStart: new Date() })
+      .where(eq(consentRecords.consentId, original.consentId))
+      .returning();
+
+    return updated;
+  }
+);
+
+app.post(
+  '/consents/:id/deny',
+  {
+    schema: {
+      params: z.object({ id: z.uuid() }),
+      body: DecideConsentSchema,
+      response: {
+        200: ConsentRecordResponseSchema,
+        404: ErrorResponseSchema,
+        409: ErrorResponseSchema,
+      },
+    },
+  },
+  async (req, reply) => {
+    const [original] = await db
+      .select()
+      .from(consentRecords)
+      .where(eq(consentRecords.consentId, req.params.id))
+      .limit(1);
+
+    if (!original) {
+      reply.code(404);
+      return { error: 'not_found', message: `No consent record with id ${req.params.id}` };
+    }
+    if (original.status !== 'pending') {
+      reply.code(409);
+      return {
+        error: 'not_pending',
+        message: 'Only a record with status=pending can be denied',
+      };
+    }
+
+    // Denial is a terminal state that reuses 'revoked' rather than adding
+    // a fifth enum value — distinguishable from an actual post-grant
+    // revoke by statusNote being set and validityStart never having been
+    // reset to an approval time (§16 "Consent approval round trip" — this
+    // is the documented choice the task called out as needing one).
+    const [updated] = await db
+      .update(consentRecords)
+      .set({ status: 'revoked', statusNote: req.body.note ?? 'Denied by patient (never approved)' })
+      .where(eq(consentRecords.consentId, original.consentId))
+      .returning();
+
+    return updated;
   }
 );
 
