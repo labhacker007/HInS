@@ -21,7 +21,7 @@
  *     (this service only records propagation rows as "pending" today —
  *     nothing actually calls out to a recipient HIP/HIU yet)
  */
-import Fastify from 'fastify';
+import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
 import {
   serializerCompiler,
@@ -43,6 +43,101 @@ import {
 } from './schemas.js';
 
 const PORT = Number(process.env.PORT ?? 4001);
+const MEDPLUM_BASE_URL = process.env.MEDPLUM_BASE_URL ?? 'http://localhost:8103';
+
+/**
+ * Caller-identity resolution for the consent approve/deny ownership gate
+ * below. Same researched approach as services/audit-service/src/index.ts's
+ * resolveCaller() (see that file's header for the full "why GET /auth/me
+ * and not /oauth2/userinfo or a forwarded-token Practitioner read" writeup
+ * — not repeated here) — duplicated in this service's own file rather
+ * than factored into a shared package, matching this codebase's existing
+ * "each service duplicates its own auth-resolution logic" convention
+ * (blueprint §16).
+ *
+ * Generalized from audit-service's version, which only ever needs to
+ * resolve a Practitioner (every audit-service caller is clinical staff):
+ * this service's approve/deny callers are PATIENTS, so this one reads
+ * `membership.profile.reference` for either a "Practitioner/<id>" or a
+ * "Patient/<id>" prefix and returns which kind it resolved, instead of
+ * assuming Practitioner like audit-service's does.
+ */
+type CallerResourceType = 'Practitioner' | 'Patient';
+
+interface AuthedCaller {
+  resourceType: CallerResourceType;
+  id: string;
+  displayName: string;
+}
+
+async function resolveCaller(authHeader: string | undefined): Promise<AuthedCaller | undefined> {
+  if (!authHeader?.startsWith('Bearer ')) return undefined;
+  let res: Response;
+  try {
+    res = await fetch(`${MEDPLUM_BASE_URL}/auth/me`, { headers: { authorization: authHeader } });
+  } catch {
+    // Medplum unreachable — fail closed (undefined -> 401), never fall
+    // back to trusting an unverified caller.
+    return undefined;
+  }
+  if (!res.ok) return undefined;
+  const body: any = await res.json().catch(() => undefined);
+  const ref: string | undefined = body?.membership?.profile?.reference;
+  if (ref?.startsWith('Practitioner/')) {
+    return { resourceType: 'Practitioner', id: ref.slice('Practitioner/'.length), displayName: body?.membership?.profile?.display ?? ref };
+  }
+  if (ref?.startsWith('Patient/')) {
+    return { resourceType: 'Patient', id: ref.slice('Patient/'.length), displayName: body?.membership?.profile?.display ?? ref };
+  }
+  return undefined;
+}
+
+/**
+ * Ownership gate for POST /consents/:id/approve and .../deny — closes the
+ * §16 "neither endpoint checks that the caller is actually the patient the
+ * pending request is for" gap. 401s if the bearer token doesn't resolve to
+ * a real Medplum caller on this project; 403s if it resolves to anyone
+ * other than the one Patient this pending request is actually for
+ * (another patient, or ANY practitioner — this is deliberately not an
+ * admin/clinician override, because the point of the approval step is
+ * that only the patient themselves decides). Returns the caller on
+ * success; undefined means a response was already sent and the route
+ * handler must return immediately without writing its own body.
+ *
+ * What this explicitly does NOT model, stated plainly rather than glossed
+ * over: a legal representative/guardian approving on the patient's
+ * behalf. CreateConsentSchema has an optional `grantor.representative`
+ * field (personId + relationship) for exactly that case, but this check
+ * only ever accepts the resolved caller being the grantor PATIENT
+ * (Patient/<grantorPatientId>) — a representative's own Medplum identity,
+ * even one correctly recorded on the original request, is never accepted
+ * here. Representative-initiated approval remains an open gap (see this
+ * service's README and docs/PLATFORM_BLUEPRINT.md §16).
+ */
+async function requirePatientOwnerCaller(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  grantorPatientId: string
+): Promise<AuthedCaller | undefined> {
+  const caller = await resolveCaller(req.headers.authorization);
+  if (!caller) {
+    reply.code(401);
+    reply.send({
+      error: 'unauthorized',
+      message: 'Provide Authorization: Bearer <token> with a valid Medplum access token for the HInS Dev project.',
+    });
+    return undefined;
+  }
+  if (caller.resourceType !== 'Patient' || caller.id !== grantorPatientId) {
+    reply.code(403);
+    reply.send({
+      error: 'forbidden',
+      message: `This action may only be taken by the patient this consent request is for (Patient/${grantorPatientId}). Caller resolved to ${caller.resourceType}/${caller.id}.`,
+    });
+    return undefined;
+  }
+  return caller;
+}
 
 const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
 app.setValidatorCompiler(validatorCompiler);
@@ -233,6 +328,8 @@ app.post(
       body: DecideConsentSchema,
       response: {
         200: ConsentRecordResponseSchema,
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
         404: ErrorResponseSchema,
         409: ErrorResponseSchema,
       },
@@ -256,6 +353,15 @@ app.post(
         message: 'Only a record with status=pending can be approved',
       };
     }
+
+    // Ownership gate — added to close the §16 "neither endpoint checks
+    // that the caller is actually the patient the pending request is
+    // for" gap. See requirePatientOwnerCaller()'s header for exactly what
+    // this does and doesn't model (notably: no representative/guardian
+    // support, even though CreateConsentSchema has an optional
+    // grantor.representative field).
+    const caller = await requirePatientOwnerCaller(req, reply, original.grantorPatientId);
+    if (!caller) return;
 
     // UPDATE in place, not an INSERT — see schema.ts header for why this
     // one transition is a documented exception to the append-only ledger
@@ -281,6 +387,8 @@ app.post(
       body: DecideConsentSchema,
       response: {
         200: ConsentRecordResponseSchema,
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
         404: ErrorResponseSchema,
         409: ErrorResponseSchema,
       },
@@ -304,6 +412,12 @@ app.post(
         message: 'Only a record with status=pending can be denied',
       };
     }
+
+    // Ownership gate — see the approve handler above and
+    // requirePatientOwnerCaller()'s header for what this does and
+    // doesn't model.
+    const caller = await requirePatientOwnerCaller(req, reply, original.grantorPatientId);
+    if (!caller) return;
 
     // Denial is a terminal state that reuses 'revoked' rather than adding
     // a fifth enum value — distinguishable from an actual post-grant
