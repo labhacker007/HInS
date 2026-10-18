@@ -3,6 +3,7 @@ import { AppShell, Group, Title, Button, Tabs } from '@mantine/core';
 import { useMedplum, useMedplumProfile } from '@medplum/react';
 import { MyRecords } from './MyRecords.js';
 import { MyConsents } from './MyConsents.js';
+import { MyAppointments } from './MyAppointments.js';
 import { CatchAll } from '../../App.js';
 import { formatHumanName } from '../../lib/fhirFormat.js';
 
@@ -35,12 +36,21 @@ export function PatientPortal() {
           </Group>
         </Group>
         <Tabs
-          value={location.pathname.startsWith('/consents') ? 'consents' : 'records'}
-          onChange={(value) => navigate(value === 'consents' ? '/consents' : '/')}
+          value={
+            location.pathname.startsWith('/consents')
+              ? 'consents'
+              : location.pathname.startsWith('/appointments')
+                ? 'appointments'
+                : 'records'
+          }
+          onChange={(value) =>
+            navigate(value === 'consents' ? '/consents' : value === 'appointments' ? '/appointments' : '/')
+          }
           px="md"
         >
           <Tabs.List>
             <Tabs.Tab value="records">My Records</Tabs.Tab>
+            <Tabs.Tab value="appointments">Appointments</Tabs.Tab>
             <Tabs.Tab value="consents">My Consents</Tabs.Tab>
           </Tabs.List>
         </Tabs>
@@ -48,6 +58,7 @@ export function PatientPortal() {
       <AppShell.Main>
         <Routes>
           <Route path="/" element={<MyRecords />} />
+          <Route path="/appointments" element={<MyAppointments />} />
           <Route path="/consents" element={<MyConsents />} />
           <Route path="*" element={<CatchAll to="/" />} />
         </Routes>

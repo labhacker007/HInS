@@ -1,9 +1,10 @@
-import { Routes, Route, Link, useNavigate } from 'react-router';
+import { Routes, Route, Link, useLocation, useNavigate } from 'react-router';
 import { AppShell, Group, Title, Button, Text } from '@mantine/core';
 import { useMedplum, useMedplumProfile } from '@medplum/react';
 import { PatientList } from './PatientList.js';
 import { NewPatient } from './NewPatient.js';
 import { PatientDetail } from './PatientDetail.js';
+import { Scheduling } from './Scheduling.js';
 import { CatchAll } from '../../App.js';
 import { NotificationBell } from '../../components/NotificationBell.js';
 
@@ -11,6 +12,7 @@ export function ClinicianApp() {
   const medplum = useMedplum();
   const profile = useMedplumProfile();
   const navigate = useNavigate();
+  const location = useLocation();
 
   return (
     <AppShell header={{ height: 60 }} padding="md">
@@ -22,6 +24,24 @@ export function ClinicianApp() {
                 HInS — Clinician
               </Link>
             </Title>
+            <Group gap="xs">
+              <Button
+                component={Link}
+                to="/"
+                variant={location.pathname === '/' || location.pathname.startsWith('/patients') ? 'light' : 'subtle'}
+                size="sm"
+              >
+                Patients
+              </Button>
+              <Button
+                component={Link}
+                to="/schedule"
+                variant={location.pathname.startsWith('/schedule') ? 'light' : 'subtle'}
+                size="sm"
+              >
+                Schedule
+              </Button>
+            </Group>
             <Text size="sm" c="dimmed">
               {profile?.resourceType === 'Practitioner' &&
                 `Dr. ${profile.name?.[0]?.given?.[0] ?? ''} ${profile.name?.[0]?.family ?? ''}`.trim()}
@@ -46,6 +66,7 @@ export function ClinicianApp() {
           <Route path="/" element={<PatientList />} />
           <Route path="/patients/new" element={<NewPatient />} />
           <Route path="/patients/:id" element={<PatientDetail />} />
+          <Route path="/schedule" element={<Scheduling />} />
           <Route path="*" element={<CatchAll to="/" />} />
         </Routes>
       </AppShell.Main>
