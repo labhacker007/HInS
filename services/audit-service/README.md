@@ -58,6 +58,16 @@ controlled, closing the gap this README used to state plainly
   still read anyone's (e.g. for an admin dashboard). This was the exact
   gap this README used to call out ("currently only scoped by the
   recipientId query param with no proof the caller IS that recipient").
+- `POST /notifications/:id/read` and `POST /notifications/read-all` now
+  apply the exact same self-or-admin check (2026-10-18 update, closing
+  the gap this README used to call out below): the caller must be the
+  notification's own recipient, or hold an active `tenant_admin`/
+  `compliance_officer` subscription to mark someone else's read. For
+  `:id/read`, the row is fetched first to learn its `recipientId` (the
+  `:id` path param alone doesn't say who owns it) — 404 if no
+  notification exists with that id, 401 with no/invalid token, 403 if
+  the caller is neither the recipient nor an admin. `read-all` checks
+  the same thing against the body's `recipientId` instead.
 
 **What's still NOT real RBAC, said plainly rather than implied fixed:**
 the role source of truth is still this same hand-seeded
@@ -68,12 +78,7 @@ system behind it yet (blueprint §16, still open). Token validation calls
 Medplum's `/auth/me` live on every request rather than verifying the
 JWT locally against Medplum's JWKS — correct today, but a network round
 trip per request where local verification would be faster; a legitimate
-follow-up, not hidden. `POST /notifications/:id/read` and
-`POST /notifications/read-all` are **not** gated by this change (out of
-this round's scope) — either lets any caller mark any notification id
-as read without proving ownership; a smaller but real residual gap,
-tracked here rather than silently left for a future session to
-rediscover.
+follow-up, not hidden.
 
 ## API
 
@@ -89,8 +94,12 @@ GET /notifications?recipientId=X&unreadOnly=false
   token, 403 someone else's id without an admin role).
 POST /notifications/:id/read
 POST /notifications/read-all   { recipientId }
-  (not yet gated by caller identity — see "What's still NOT real RBAC"
-  above)
+  Both require Authorization: Bearer <Medplum access token>. Same
+  self-or-admin rule as GET /notifications: you may mark your own
+  notifications read, or anyone's if you hold an active tenant_admin/
+  compliance_officer alert_subscriptions role. (401 no/invalid token,
+  403 someone else's without an admin role, 404 on :id/read if the
+  notification id doesn't exist.)
 
 POST /subscriptions   { practitionerId, practitionerName, role }
 GET  /subscriptions
