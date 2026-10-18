@@ -63,13 +63,17 @@ describes, correctly, and verified against real seeded data. It does
   slower than it needs to be; a legitimate follow-up, not hidden. Full
   Keycloak/RBAC integration is still the bigger open item (blueprint
   §16).
-- Medplum access for this service's own calls to Medplum (export/
-  reidentify) reuses the admin dev login, not a proper
-  `client_credentials` service identity — see `src/medplumClient.ts`'s
-  header for why, and §16 of the blueprint for the open item. (This is
-  separate from the caller-authentication work above: that's about who's
-  allowed to call *this* service's endpoints; this is about how *this
-  service* authenticates to Medplum to do its own work.)
+- **Medplum access for this service's own calls to Medplum (export/
+  reidentify) now uses a real `client_credentials` grant, not the admin
+  dev login (2026-10-18 update):** re-checked directly against this
+  instance rather than assuming the earlier attempt's finding still
+  held — `GET /fhir/R4/ClientApplication/:id` with an admin bearer token
+  *does* return the `secret` field, so this service authenticates as the
+  project's own `ClientApplication` (a real non-human service identity)
+  rather than the admin's email+password. See `src/medplumClient.ts`'s
+  header. (This is separate from the caller-authentication work above:
+  that's about who's allowed to call *this* service's endpoints; this is
+  about how *this service* authenticates to Medplum to do its own work.)
 
 ## API
 

@@ -1,60 +1,34 @@
 /**
  * Server-side Medplum access for this service.
  *
- * KNOWN GAP, not hidden: this reuses the same admin email/password +
- * PKCE login as scripts/seed/seed-demo-data.mjs, rather than a proper
- * OAuth2 client_credentials service identity. Medplum supports
- * client_credentials (docs/auth/methods/client-credentials) and it's the
- * architecturally correct choice for a backend service — no human
- * password embedded in a service. Self-hosted Medplum's ClientApplication
- * create/read API didn't return a `secret` field when tried during this
- * build (docs don't document where self-hosted exposes it outside the
- * admin UI), so this was deferred rather than block the feature on it.
- * Swap this module for a client_credentials flow once that's resolved —
- * tracked in docs/PLATFORM_BLUEPRINT.md §16.
+ * Uses a real OAuth2 `client_credentials` grant against the HInS Dev
+ * project's own `ClientApplication` — no human password embedded in a
+ * service (closes the §16 gap this file used to document: "Self-hosted
+ * Medplum's ClientApplication create/read API didn't return a `secret`
+ * field when tried"). Re-verified live (2026-10-18) directly against this
+ * instance: `GET /fhir/R4/ClientApplication/:id` with an admin bearer
+ * token DOES return `secret` — the earlier attempt must have used a
+ * different endpoint or admin-UI-only path; this was re-checked, not
+ * assumed. `grant_type=client_credentials` against `/oauth2/token` then
+ * resolves via `/auth/me` to `ClientApplication/:id` as the caller's own
+ * profile — a real, non-human service identity.
+ *
+ * `MEDPLUM_SERVICE_CLIENT_ID`/`_SECRET` default to this project's seeded
+ * dev client (`scripts/seed/` creates it) purely for local-dev
+ * convenience, same pattern as every other dev-default credential in
+ * this codebase — a real deployment sets these from a secret store.
  */
-import { randomBytes, createHash } from 'node:crypto';
-
 const MEDPLUM_BASE_URL = process.env.MEDPLUM_BASE_URL ?? 'http://localhost:8103';
-const ADMIN_EMAIL = process.env.MEDPLUM_SERVICE_EMAIL ?? 'admin@example.com';
-const ADMIN_PASSWORD = process.env.MEDPLUM_SERVICE_PASSWORD ?? 'medplum_admin';
-const PROJECT_NAME = process.env.MEDPLUM_PROJECT_NAME ?? 'HInS Dev';
-
-function b64url(buf: Buffer): string {
-  return buf.toString('base64url');
-}
+const CLIENT_ID = process.env.MEDPLUM_SERVICE_CLIENT_ID ?? '7e490c9a-62cd-402f-85e2-dc1e91bc62ec';
+const CLIENT_SECRET =
+  process.env.MEDPLUM_SERVICE_CLIENT_SECRET ?? 'dd062171cedf8cbc3f9fa2657146e48d77074962cdde9250fcf4140cf618f435';
 
 let cachedToken: { accessToken: string; expiresAt: number } | undefined;
 
 async function login(): Promise<string> {
-  const verifier = b64url(randomBytes(32));
-  const challenge = b64url(createHash('sha256').update(verifier).digest());
-
-  let resp: any = await fetchJson(`${MEDPLUM_BASE_URL}/auth/login`, {
-    method: 'POST',
-    body: {
-      email: ADMIN_EMAIL,
-      password: ADMIN_PASSWORD,
-      scope: 'openid',
-      codeChallenge: challenge,
-      codeChallengeMethod: 'S256',
-    },
-  });
-
-  let code = resp.code;
-  if (resp.memberships) {
-    const membership = resp.memberships.find((m: any) => m.project.display === PROJECT_NAME);
-    if (!membership) throw new Error(`deid-service: no membership in project "${PROJECT_NAME}"`);
-    resp = await fetchJson(`${MEDPLUM_BASE_URL}/auth/profile`, {
-      method: 'POST',
-      body: { login: resp.login, profile: membership.id },
-    });
-    code = resp.code;
-  }
-
   const token = await fetchJson(`${MEDPLUM_BASE_URL}/oauth2/token`, {
     method: 'POST',
-    form: { grant_type: 'authorization_code', code, code_verifier: verifier },
+    form: { grant_type: 'client_credentials', client_id: CLIENT_ID, client_secret: CLIENT_SECRET },
   });
   return token.access_token;
 }
