@@ -100,8 +100,11 @@ import { formatHumanName, formatPatientMrn } from '../../lib/fhirFormat.js';
  * requires that bed to be the one in the LAST (open, no `period.end`)
  * location entry, not just present somewhere in the array.
  *
- * ── Known limitation, same caveat Scheduling.tsx documents for its own
- *    double-booking check ───────────────────────────────────────────────
+ * ── Known limitation: check-then-write is not atomic ───────────────────
+ * (Not the same gap Scheduling.tsx documents — that file's own caveat is
+ * that same-PATIENT double-booking across different practitioners isn't
+ * checked at all; it has no TOCTOU/non-atomicity language. This is a
+ * distinct, new limitation, specific to this file.)
  * The occupancy check-then-create/transfer is NOT atomic. This is a
  * direct browser-to-FHIR flow with no backend service or DB constraint to
  * lean on, so two concurrent admit/transfer attempts into the same bed
@@ -588,8 +591,17 @@ function DischargeForm({
     if (!disposition || !encounter.id) return;
     setSaving(true);
     try {
+      // Re-fetch right before writing, same as handleAdmit/handleTransfer's
+      // isBedCurrentlyOccupied() recheck -- the `encounter` prop is a
+      // snapshot from page load and could be stale (e.g. a concurrent
+      // discharge of the same patient already closed it). Operate on the
+      // fresh copy, not the closure's.
+      const current = await medplum.readResource('Encounter', encounter.id);
+      if (current.status !== 'in-progress') {
+        throw new Error('This admission is no longer in progress -- someone else may have already discharged it. Refresh and try again.');
+      }
       const now = new Date().toISOString();
-      const entries = [...(encounter.location ?? [])];
+      const entries = [...(current.location ?? [])];
       const openIdx = entries.length - 1;
       if (openIdx < 0 || entries[openIdx].period?.end) {
         throw new Error('No open location entry found on this Encounter -- cannot discharge.');
@@ -598,10 +610,10 @@ function DischargeForm({
 
       const dispositionLabel = DISPOSITIONS.find((d) => d.value === disposition)?.label ?? disposition;
       await medplum.updateResource<Encounter>({
-        ...encounter,
+        ...current,
         status: 'finished',
         location: entries,
-        period: { ...encounter.period, end: now },
+        period: { ...current.period, end: now },
         // Free-text .text only, deliberately -- no coded value. No
         // discharge-disposition terminology is wired up anywhere in this
         // codebase yet (same honest-text-over-fake-code choice
