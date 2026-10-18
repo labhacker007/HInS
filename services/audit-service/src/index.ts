@@ -277,9 +277,54 @@ app.get(
 app.post(
   '/notifications/:id/read',
   {
-    schema: { params: z.object({ id: z.uuid() }), response: { 200: z.object({ ok: z.literal(true) }) } },
+    schema: {
+      params: z.object({ id: z.uuid() }),
+      response: {
+        200: z.object({ ok: z.literal(true) }),
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+      },
+    },
   },
-  async (req) => {
+  async (req, reply) => {
+    // Same self-or-admin check as GET /notifications, but the recipientId
+    // to check against isn't known until the row is read — the :id path
+    // param alone doesn't say who owns the notification. So: fetch the
+    // row first (single query, just the recipientId we need), 404 if the
+    // id doesn't exist at all, THEN apply the self-or-admin check before
+    // touching it. This closes the gap this service's README used to
+    // call out: "either lets any caller mark any notification id as read
+    // without proving ownership."
+    const caller = await resolveCaller(req.headers.authorization);
+    if (!caller) {
+      reply.code(401);
+      return reply.send({
+        error: 'unauthorized',
+        message: 'Provide Authorization: Bearer <token> with a valid Medplum access token for the HInS Dev project.',
+      });
+    }
+
+    const [row] = await db
+      .select({ recipientId: notifications.recipientId })
+      .from(notifications)
+      .where(eq(notifications.id, req.params.id));
+    if (!row) {
+      reply.code(404);
+      return reply.send({ error: 'not_found', message: `No notification with id ${req.params.id}.` });
+    }
+
+    if (caller.practitionerId !== row.recipientId) {
+      const role = await activeRoleFor(caller.practitionerId);
+      if (!role || !(ADMIN_ROLES as readonly string[]).includes(role)) {
+        reply.code(403);
+        return reply.send({
+          error: 'forbidden',
+          message: `You may only mark your own notifications read (this notification belongs to Practitioner/${row.recipientId}, you are Practitioner/${caller.practitionerId}), or hold an active alert_subscriptions role of ${ADMIN_ROLES.join(' or ')} to mark anyone's.`,
+        });
+      }
+    }
+
     await db.update(notifications).set({ read: true }).where(eq(notifications.id, req.params.id));
     return { ok: true as const };
   }
@@ -331,10 +376,36 @@ app.post(
   {
     schema: {
       body: z.object({ recipientId: z.string().min(1) }),
-      response: { 200: z.object({ ok: z.literal(true) }) },
+      response: {
+        200: z.object({ ok: z.literal(true) }),
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+      },
     },
   },
-  async (req) => {
+  async (req, reply) => {
+    // Exact same self-or-admin check as GET /notifications, keyed on the
+    // body's recipientId instead of a query param — closing the other
+    // half of the gap this service's README used to call out.
+    const caller = await resolveCaller(req.headers.authorization);
+    if (!caller) {
+      reply.code(401);
+      return reply.send({
+        error: 'unauthorized',
+        message: 'Provide Authorization: Bearer <token> with a valid Medplum access token for the HInS Dev project.',
+      });
+    }
+    if (caller.practitionerId !== req.body.recipientId) {
+      const role = await activeRoleFor(caller.practitionerId);
+      if (!role || !(ADMIN_ROLES as readonly string[]).includes(role)) {
+        reply.code(403);
+        return reply.send({
+          error: 'forbidden',
+          message: `You may only mark your own notifications read (recipientId must equal your own practitioner id, Practitioner/${caller.practitionerId}), or hold an active alert_subscriptions role of ${ADMIN_ROLES.join(' or ')} to mark anyone's.`,
+        });
+      }
+    }
+
     await db
       .update(notifications)
       .set({ read: true })
