@@ -1,6 +1,6 @@
 # HInS Platform Blueprint
 
-**Project Development & Requirements Document · v0.9**
+**Project Development & Requirements Document · v1.0**
 Status: Draft — decisions in progress · Scope: India + US, dual-jurisdiction · Last updated: 2026-10-19
 
 A modular, API-first, AI-native hospital operating system — architecture, compliance
@@ -50,6 +50,8 @@ Claude artifact: https://claude.ai/artifact/3NRZUR3SC5GoVQi3K1jWSw
 | 2026-10-18 | **Notification read/read-all ownership check added** to `services/audit-service` — `POST /notifications/:id/read` and `/read-all` previously let any caller mark any notification read with no ownership check | Both routes now apply the exact same self-or-admin pattern `GET /notifications` already used: caller must be the notification's own recipient, or hold an active admin role, to mark it read. `:id/read` fetches the row first to learn its `recipientId` (404 before the auth gate if the id doesn't exist). Verified live with direct Postgres checks that the `read` flag actually flips, not just a 200 with no effect, including the admin-acting-on-someone-else's-notification path. |
 | 2026-10-18 | **Role source of truth for `deid-service`/`audit-service` moved from the hand-seeded `alert_subscriptions` table to a real Keycloak realm** (`hins-dev`) — closes the biggest remaining item from the 2026-10-18 RBAC hardening entry above | `services/{deid,audit}-service/src/keycloakRoles.ts` looks up the caller's realm role (`tenant_admin`/`compliance_officer`) via Keycloak's own Admin REST API, authenticating as a real service-account `client_credentials` identity (not shared bootstrap admin credentials) — the exact Keycloak role set needed (`view-users`+`query-users`+`view-realm`+`manage-users` on `realm-management`, within `hins-dev`'s own self-management pattern) was found empirically against the live instance, not guessed. **Fails closed**: any Keycloak error (unreachable, timeout, malformed response) resolves to "no role" (403) — verified live by pointing a test instance's `KEYCLOAK_BASE_URL` at an unreachable port and confirming an otherwise-valid admin token still got 403, not 200 or 500. Medplum login and caller-identity resolution (`resolveCaller()` via `GET /auth/me`) are completely unchanged — this only moves *where an already-identified caller's role comes from*, not *how the caller is identified*. `audit-service`'s `POST`/`GET /subscriptions` were repointed at Keycloak for real rather than left silently writing to a now-unread table; `alert_subscriptions` the table is kept and still drives `POST /events`' notification fan-out, a separate concern confirmed untouched. Seeded by a new idempotent `scripts/seed/seed-keycloak-roles.mjs`. **Known gap, not hidden:** Medplum and Keycloak are *not federated* — there is no SSO, practitioners/patients still log into Medplum directly, and provisioning a practitioner into Keycloak is still a separate manual/seed step from their Medplum account existing. That reconciliation remains open (§16). |
 
+| 2026-10-19 | **Deep research round on DPDP, HIPAA, medical-record standardization, and the team/expertise needed to build a fully-wired EHR/EMR/Hospital Management System** — user asked for real research before further building, not assumptions | Five parallel research agents (DPDP, HIPAA, standardization, team/expertise, HMS subsystem scope) plus a synthesis pass, all re-verified against live web sources as of this date, not carried forward from the earlier (thinner, partly-unconfirmed) §03 text. Substantially expanded/revised: §03.1/03.1a (DPDP — phased commencement ~May 2027, no health-data special category, SDF obligations, cross-border is a negative list with no restricted countries yet), §03.4/03.4a (HIPAA — NPRM now slipped to a July 2027 target and actively opposed; Section 1557 AI-bias duty already live since May 2025; two named Security/Privacy Officials already unconditionally required), §03.5–03.8 (new: SNOMED CT India licensing is free/administrative, not a blocker; India's real RxNorm-equivalent is CDCI; US Core 6.1.0/USCDI v3/SMART 2.2.0 baseline; the ABDM FHIR IG's seven Composition "Record" bundles are a literal unbuilt gap, not an aspirational one; NHCX), §04.1/§04.4 (ICMR consent sub-types; the guardian/representative gap is live today, not hypothetical, given St. Jones's pediatrics department), §08.4 (new — per-function AI Access Policy as the actual minimum-necessary control, the single highest-leverage finding of the round), §09.1 (new — FDA SaMD boundary, unconditional on image/signal analysis), §12a (new — required team/expertise, two tiers), §13/§13a (HMS subsystem build order: bed/ward first, then US billing/RCM, then pharmacy plumbing, then NHCX, then inventory, then LIS/RIS-PACS last behind the AGPL review). Every finding that couldn't be verified against a primary legal/technical source (a Gazette page date, an NPRM figure, a sublicense requirement) is flagged as such in the text, not smoothed over. This is research + planning only — no code changed in this round. |
+
 This table grows each session the plan is revisited — see §16 for decisions still open.
 
 ---
@@ -95,17 +97,124 @@ default.
 
 | Framework | Jurisdiction | Governs | Platform obligation |
 |---|---|---|---|
-| DPDP Act 2023 + Rules 2025 | India | All personal data processing | Granular, revocable, purpose-bound consent; interoperable Consent Manager support; Data Protection Board breach notice; 18-month phased compliance window |
-| ABDM — ABHA, HIE-CM | India | Cross-facility health data exchange | FHIR R4 bundles; HIP/HIU roles; signed per-source consent artefacts; no central repository (§04) |
+| DPDP Act 2023 + Rules 2025 | India | All personal data processing | Granular, revocable, purpose-bound consent; interoperable Consent Manager support; Data Protection Board breach notice; phased commencement (§03.1) |
+| ABDM — ABHA, HIE-CM, NHCX | India | Cross-facility health data + claims exchange | FHIR R4 bundles conforming to the ABDM FHIR IG (§03.8); HIP/HIU roles; signed per-source consent artefacts; no central repository (§04) |
 | ICMR National Ethical Guidelines (2017) | India | Human-participant research | Ethics-committee-approved informed consent; broad-consent & waiver handling; child assent |
-| HIPAA — Privacy, Security, Breach Notification | United States | PHI at covered entities/business associates | Minimum-necessary access; encryption at rest/in transit; 60-day breach notice; signed BAA with every PHI-touching vendor, AI providers included |
-| SNOMED CT · LOINC · ICD-10/11 · HL7v2 · FHIR R4 · DICOM | Global · India via NRCeS | Clinical terminology & interoperability | FHIR R4 as the API backbone; coded, not free-text, problems/labs/orders wherever a terminology exists |
+| HIPAA — Privacy, Security, Breach Notification | United States | PHI at covered entities/business associates | Minimum-necessary access, including by AI functions (§08.4); encryption at rest/in transit; named Security + Privacy Officials; signed BAA with every PHI-touching vendor, AI providers included |
+| Section 1557 (ACA) · 42 CFR Part 2 | United States | Nondiscrimination in clinical AI tools; substance-use-disorder records | Bias identification/mitigation for any AI input correlated with a protected class (§03.4a); SUD records need their own consent subtype, not generic `treatment_authorization` |
+| USCDI v3 / US Core 6.1.0 / SMART App Launch 2.2.0 / Info Blocking (45 CFR Part 171) | United States | Data portability & interoperability duties | FHIR resources must be US-Core-*conformant*, not just FHIR-*shaped* (§03.7); patient's own access to their own record can't be limited outside a recognized exception |
+| SNOMED CT · LOINC · ICD-10 · CDCI/RxNorm · HL7v2 · FHIR R4 · DICOM | Global · India via NRCeS | Clinical terminology & interoperability | FHIR R4 as the API backbone; coded, not free-text, problems/labs/medications/orders wherever a terminology exists (§03.5–03.8) |
 
-**03.1 India — DPDP Act & Rules.** Consent must be free, specific, informed,
-revocable, one notice per purpose. The "essential services" carve-out for
-hospitals applies only once government-notified — don't assume it by default.
-Research processing has its own exemption under the Rules' Second Schedule,
-conditional on not being used to make decisions about the individual.
+**03.1 India — DPDP Act & Rules.** The DPDP Rules, 2025 (Gazette **G.S.R.
+846(E)**, notified 13–14 Nov 2025 — sources disagree by a day; confirm
+against the Gazette text before this date is load-bearing anywhere) commence
+in phases: the Data Protection Board's own constitution and the Consent
+Manager registration machinery took effect on notification; the substantive
+obligations that actually govern how HInS behaves — SDF duties, breach
+notification, parental consent, cross-border mechanics, the research
+exemption — are reported, consistently across independent sources, as
+commencing roughly 18 months later, **around 13 May 2027** (high-confidence,
+not primary-verified). No Data Protection Board Chairperson/Members are
+confirmed appointed and no penalty order has been reported — enforcement
+risk is a forward design target today, not a live one; treat any vendor
+claim of a "first DPDP fine" as fabricated or confused with a different
+regime (IT Act §43A, CERT-In) until shown otherwise.
+
+**DPDP has no "sensitive personal data" tier.** Unlike GDPR Art. 9, and
+unlike India's own prior SPDI Rules 2011 (which *did* carve out health data),
+the enacted Act gives health data no special category of its own. Any
+elevated protection it gets comes from sectoral sources layered on top —
+Clinical Establishments Rules, MoHFW's 2016 EHR Standards (§03.5), ABDM's
+Health Data Management Policy — not from DPDP's text. This blueprint should
+not imply DPDP itself treats health data specially.
+
+Consent must be free, specific, informed, revocable, one notice per purpose
+(Section 6). The "essential services" carve-out for hospitals applies only
+once government-notified — not yet. **Breach notification (Rule 7) has no
+risk/harm threshold** — every breach is reported, full stop; stricter than
+both HIPAA's documented four-factor risk assessment and GDPR's risk-based
+trigger. Two-stage: intimation "without delay," a detailed report to the
+Board within 72 hours; individual notice is "without delay" too, with the
+exact SLA (also 72h, or genuinely open-ended) disputed across sources —
+confirm against the Gazette before §09/§15's breach workflow hard-codes a
+number. Penalties: up to ₹250 crore for inadequate safeguards, up to ₹200
+crore for failing to notify — separate, stackable, per instance.
+
+**Children (Section 9, Rule 10):** verifiable parental/guardian consent is
+required under 18, with the parent's/guardian's own identity *and*
+relationship/age verified by a reliable means (e.g. DigiLocker) — a
+self-certifying checkbox is explicitly insufficient. Tracking, behavioural
+monitoring, and targeted advertising toward a child are barred **even with
+valid consent** — not consent-curable. A possible healthcare-sector exemption
+exists in principle (§9(4)/(5) + Fourth Schedule) but is not confirmed
+notified — build to the strict baseline. **This is a live gap in the current
+build, not a future compliance deadline:** §04.4's "guardian/LAR" grantor
+type is schema-present but not functionally usable — approve/deny (2026-10-18)
+only ever accepts the patient's own resolved identity — and St. Jones already
+has a pediatrics department (§02). See the §04.4 update below.
+
+**Significant Data Fiduciary (SDF):** no numeric designation thresholds are
+officially notified — any blog-cited figure is uncorroborated speculation,
+not DPDP text. Hospital-scale health platforms are widely discussed as
+plausible SDF candidates on sensitivity-of-data alone. If/when designated:
+an India-resident DPO reporting to the governing board; an independent data
+auditor, structurally separate from the DPO; a Rule-13 DPIA + audit every 12
+months; **algorithmic/software due-diligence** — directly relevant to §08:
+if the platform or a tenant is ever SDF-designated, every AI Gateway
+function touching patient data needs this due-diligence, not just the
+frontier-model BAA question §08 already tracks; and a narrower Rule 13(4)
+power to require specified data categories processed only within India,
+distinct from and tighter than the general cross-border rule below.
+
+**Cross-border transfer (Section 16)** is a negative-list model — the
+opposite of GDPR's adequacy-list approach: transfer is permitted everywhere
+except countries the government specifically restricts by notification. No
+restricted-country list exists yet, so sending Indian patients' data to a
+frontier model hosted outside India is **not independently blocked by
+Section 16 today** — don't let this blueprint imply a live DPDP
+data-residency requirement that doesn't yet exist. Track the first
+restricted-country notification as the trigger to re-architect §08's AI
+Gateway routing for India-mode tenants.
+
+**Research/archiving/statistical exemption** (§17(2)(b), Rule 16, Second
+Schedule) is conditional on adherence to the Schedule's own standards — **the
+Second Schedule text itself has not been retrieved/verified against the
+primary Gazette document; don't treat deid-service's methods (§11) as a
+confirmed DPDP legal safe harbor specifically** until that's checked, only as
+independently justified under HIPAA/GDPR. The exemption explicitly does
+**not** cover processing used to decide about an identifiable individual — a
+sharp, previously-unstated implication: active clinical-trial enrollment,
+dosing, and continuation/withdrawal decisions plausibly fall **outside** this
+exemption even when routed through the same de-identification pipeline as
+aggregate research use. Conflating "de-identified" with "DPDP-exempt" is a
+real compliance error this blueprint didn't previously guard against.
+
+**Who is the Data Fiduciary, exactly?** Each hospital tenant is the Data
+Fiduciary for its own patients; HInS-as-platform is a Data Processor when
+merely operating software on a hospital's instructions. **HInS likely
+becomes an independent or co-Data Fiduciary for the cross-tenant research
+warehouse specifically (§11, §16)**, since that processing's purpose is
+determined by HInS, not any one hospital — this is inference from DPDP's own
+fiduciary/processor definitions, not a cited finding about HInS, and needs a
+real legal opinion before being treated as settled. It determines who owes
+the DPO/breach/grievance obligations for that data flow.
+
+**03.1a DPDP Consent Manager vs. ABDM Consent Manager (HIE-CM) — do not
+conflate.** These share the English phrase but are legally distinct systems:
+ABDM's is health-sector-only, mandatory for cross-facility exchange, NHA-
+empanelled via an M1→M2→M3 sandbox process; DPDP's is sector-agnostic,
+**optional for the Data Principal** (DPDP's default is direct
+fiduciary-to-principal consent under Section 6), and registered with the
+Data Protection Board rather than NHA. Both independently require the router
+itself be architecturally unable to read the data it routes — the same
+"router never sees plaintext" principle arrived at twice, in two separate
+regimes (see also NHCX, §03.8). **Good news for the current build, stated
+plainly:** the patient-direct consent dashboard already built (grant/revoke,
+the pending-approval round trip) is legitimate, standalone DPDP consent — **no
+DPDP Consent Manager integration is required for DPDP compliance.** What
+remains open is the separate ABDM HIE-CM integration for cross-facility
+exchange (§04.2, §03.8) — don't let "we built consent" collapse these two
+into one solved problem.
 
 **03.2 India — ABDM consent model.** Federated by design: records stay at the
 originating HIP and move only via a signed consent artefact scoped to a
@@ -115,27 +224,217 @@ leak.
 **03.3 India — ICMR research ethics.** Any research/analytics data path (§11)
 sits downstream of ICMR's consent rules — written, ethics-committee-approved,
 with broad consent, waiver-by-committee, and child assent as distinct,
-trackable types.
+trackable types. See §04.1's update below — the current ledger's single
+`research` type can't yet represent these as distinct, trackable values.
 
-**03.4 United States — HIPAA.** *Status check:* HHS's proposed Security Rule
-update (NPRM, Jan 2025) was still proposed, not final, as of the March 2025
-comment close — verify current status. Build to the proposed bar anyway:
-encryption at rest/in transit, mandatory MFA, network segmentation, annual
-asset inventory, biannual vulnerability scans, annual pen tests, access revoked
-within 1 hour of termination, DR restoring service within 72 hours. Every
-business associate needs written, annually-reverified safeguard verification.
+**03.4 United States — HIPAA.** *Status, re-verified:* the Security Rule NPRM
+(Federal Register, Jan 6 2025; comments closed Mar 7 2025, ~4,745–4,747
+comments) remains unfinalized. HHS's own target has slipped from spring 2025,
+to ~May 2026, to the current Unified Agenda entry (RIN 0945-AA22) listing
+**July 2027**, now a Long-Term Action (conventionally: no action expected
+within 12 months); 100+ hospital/provider groups have asked HHS to
+**withdraw** it outright, not just delay it. The currently enforceable law is
+still the 2013 Omnibus Security Rule. Build to the proposed bar anyway, but
+state the status honestly — "proposed since Jan 2025, agency's own target now
+July 2027, actively opposed, genuinely uncertain," not "coming in 2026." This
+blueprint's existing "access revoked within 1 hour of termination" figure
+could not be re-verified against the NPRM text — neither could an
+alternative "24 hours" found in secondary sources; don't carry either forward
+with false confidence until checked against the Federal Register text
+directly.
 
-**03.5 Terminology & interoperability.** India is a SNOMED International
-member (since March 2014) — free use, but still requires an affiliate license
-via NRCeS/C-DAC Pune. LOINC is free worldwide. India's 2016 MoHFW EHR
-standards recommend SNOMED CT, an ICD edition, LOINC, and NDC-equivalent drug
-coding — sources disagreed on ICD-10 vs. ICD-11; confirm against the current
-MoHFW document before locking the terminology service's default code system.
+**"Addressable" does not mean optional, today, under the already-enforceable
+rule** — a covered entity must adopt it or a documented equivalent with
+written reasoning; skipping it with no analysis is a gap, not a permitted
+choice. Two specs are unconditionally **Required**, no exceptions: unique
+user/entity identification and person/entity authentication (45 CFR
+§164.312(a)(2)(i), (d)) — every human *and machine* caller, including the AI
+Gateway's own service identity, needs its own verifiable identity, never a
+shared credential. This is exactly what the 2026-10-18 hardening (deid-service
+off the shared admin login onto a `client_credentials` identity) closed —
+correctly understood as a Required safeguard, not a nice-to-have.
 
-> **Not legal advice.** §03 synthesizes public secondary sources, several
-> explicitly flagging conflicting/unconfirmed details. Treat it as a briefing
-> for counsel, not a substitute — especially the essential-services exemption,
-> the research exemption's conditions, and the ICD-10/11 call.
+**Two named roles are required right now, unconditionally, zero staging
+delay** — 45 CFR §164.308(a)(2) requires a named **Security Official**;
+§164.530(a) separately requires a named **Privacy Official** (one person can
+hold both). **Neither is currently named anywhere in this project.** Across
+every regulatory domain in this document, this is the one gap that's already,
+unconditionally, legally binding the moment real PHI (not synthetic St.
+Jones data) touches the system — not staged to a future date the way most of
+DPDP's substantive obligations are. Build to the proposed bar too: encryption
+at rest/in transit, mandatory MFA, network segmentation, annual asset
+inventory, biannual vulnerability scans, annual pen tests, DR restoring
+service within 72 hours. Every business associate needs written,
+annually-reverified safeguard verification.
+
+**03.4a Adjacent US obligations, not previously tracked.** **Section 1557**
+(ACA nondiscrimination, final rule effective Jul 5 2024, 45 CFR Part 92
+§92.210) reaches "any automated or non-automated tool... including AI" used
+to support clinical decision-making — plainly covers the CDSS (§05) and the
+voice-pipeline's structuring step (§08.1 step 4). Covered entities must make
+reasonable efforts to **identify** uses where race, color, national origin,
+sex, age, or disability (including proxies) are input variables, and
+**mitigate** discrimination risk — compliance deadline was **May 1 2025;
+already live today**, independent of HIPAA. No module currently has a
+documented bias-evaluation step. **The 2024 HIPAA Reproductive Health Privacy
+Rule was vacated nationwide** (*Purl v. HHS*, N.D. Tex., Jun 18 2025; sources
+disagree on exact scope). The pre-2024 federal baseline is back — any extra
+reproductive-health-PHI protection now depends entirely on the individual US
+state a tenant operates in. Not fixable by a platform control; it's per-tenant
+state-law review the moment a US hospital in an affected state onboards.
+**42 CFR Part 2** (substance-use-disorder records) was realigned with HIPAA
+(final rule, compliance deadline Feb 16 2026, passed) — one consent can now
+cover future TPO uses — but Part 2's protection against using SUD
+records/testimony against a patient in legal proceedings, absent separate
+consent or a court order, survives untouched. That would be silently lost if
+a substance-use diagnosis is tagged like any other `Condition` under generic
+`treatment_authorization` (§04.1) — argues for a distinct SUD-records consent
+subtype, not a storage change.
+
+**03.5 Terminology & interoperability — India.** India has been a SNOMED
+International member since March 2014; C-DAC Pune's NRCeS is the National
+Release Centre. India's 2016 MoHFW EHR Standards normatively name **SNOMED
+CT**, **LOINC** (free worldwide, no license — already correctly used in
+seed data, zero remaining gap on this axis), **ICD-10** for
+classification/reporting, plus HL7 v2.8.2 for messaging, HL7 CCD R1 for
+summaries, and DICOM for images/waveforms — and notably do **not** mention
+FHIR normatively at all; ABDM's FHIR-centric layer (§03.8) is additional to,
+not a replacement for, this still-current standard. Practical implication: a
+platform conformant only to the ABDM FHIR layer may still be unable to talk
+to a hospital's existing lab/radiology infrastructure built against HL7v2/
+CCD/DICOM — relevant the moment HInS interfaces with a hospital's own
+pre-existing instruments (§05, §13). **ICD-10 vs. ICD-11:** NRCeS's own
+guidance names ICD-10 as current; one secondary source's "ICD-11 (2016)"
+claim is internally impossible (ICD-11 wasn't WHO-adopted until 2019) and
+should be treated as an error. India has separately engaged ICD-11 for
+**AYUSH traditional-medicine coding only** (NAMASTE→ICD-11 TM2 mapping, WHO
+"Blue Browser," Feb 2025) — not a general mandate. Default India-mode
+`Condition` coding to ICD-10; treat ICD-11/TM2 as a distinct, optional,
+AYUSH-specific item if that scope is ever added (not currently in scope).
+Confirm this against the primary 2016 MoHFW document before treating it as
+fully settled. Globally, WHO's own figures (May 2024) show only 14 of 132
+Member States reporting in ICD-11 — a dual India+US platform should expect
+ICD-10 as the dominant real-world code for the foreseeable future.
+
+**03.6 SNOMED CT India — licensing, and the real drug-coding standard.** The
+"affiliate license" NRCeS/C-DAC Pune administers via SNOMED International's
+Member Licensing & Distribution Service (MLDS) is a **free, administrative
+registration**, not a commercial purchase — obtained via the MLDS portal,
+biannual release access. This re-reads terminology-service's stated blocker
+("needs a licensed SNOMED CT India edition, not available in this
+environment") as substantially smaller than it sounds: **a days-to-weeks
+administrative step, not a multi-month procurement dependency.** One real
+nuance: MLDS terms reportedly restrict a sublicensee's default rights to
+"exploring and evaluating" — a hospital tenant deploying HInS commercially in
+India may need its own sublicense, distinct from HInS's own affiliate
+registration; resolve with counsel or NRCeS directly. **India's real analog
+to RxNorm has a name: "Common Drug Codes for India" (CDCI)**, distributed as
+the SNOMED CT India Drug Extension (module `IN1000189`), synchronized
+biannually, through the same MLDS mechanism — not a second procurement path.
+Coverage is in the tens of thousands of generic/branded concepts and growing;
+confirm exact current figures against NRCeS's own release notes before
+citing precisely. It is **not** RxNorm-compatible — US-tenant medications
+still need RxNorm (NLM, free API use; bulk data needs a one-time free UMLS
+license) — so a dual-jurisdiction platform ends up with two separate,
+non-interoperable medication-coding pipelines, one per jurisdiction. **This
+is the sharpest concrete AI/automation blocker found in this research round:**
+a drug-interaction/allergy CDSS check (already named in §05's module catalog)
+works by looking up two *coded* drug concepts against a known interaction
+database — with medications stored as free text, there is no concept ID to
+look up, so the checker cannot run **at all**, for any prescription, not a
+degraded version of one. Wiring CDCI (India) or RxNorm (US) into
+`MedicationRequest.medicationCodeableConcept` at entry time — ideally picked
+from a coded formulary at the point of e-prescribing, not free-typed — is the
+literal precondition for a real drug-interaction CDSS to exist, not an
+incremental improvement to one that already does.
+
+**03.7 United States — USCDI, US Core, SMART App Launch, Information
+Blocking, TEFCA.** HIPAA (§03.4) is only half the US surface relevant to
+"fully wired EHR" — the other half governs data *portability and
+interoperability* duties, the specific axis "standardization unlocks AI
+value" lives on. **USCDI v3, paired with US Core 6.1.0 and SMART App Launch
+2.0.0, is the ONC-certification-mandatory baseline under the HTI-1 final
+rule** — not v4+ (voluntary; a proposal to move the mandatory baseline to v4
+was withdrawn Dec 29 2025). Set HInS's US FHIR-conformance floor at US Core
+6.1.0 / USCDI v3 now; treat v4+ as optional future-proofing, and re-check this
+on a recurring cadence (ONC ships a new USCDI version roughly annually) —
+don't treat it as settled once written down. USCDI's data classes, each
+mapped in US Core to a specific FHIR profile, are the actual element-by-
+element answer to "which FHIR profile does this clinical fact belong in" —
+HInS's current `DocumentReference`/`Observation`/`Condition` usage is
+FHIR-*shaped* but not yet US-Core-*conformant*, which is the real bar for
+"this talks to a US hospital's EHR or payer," not merely "uses FHIR."
+**SMART App Launch's current published edition is v2.2.0** (finer-grained,
+search-parameter-scoped scopes, e.g. `patient/Observation.rs?category=
+vital-signs`; mandatory PKCE) — §05's Patient Portal names "SMART on FHIR"
+as an aspiration with no actual OAuth2/launch-context/scope model built yet.
+This matters beyond third-party apps: **the SMART scope grammar is also the
+natural mechanism for §08.4's per-function AI access scoping** — adopt it now
+rather than invent a parallel scheme later, so the same mechanism serves both
+a real third-party app and HInS's own internal AI-access scoping.
+**Information blocking (45 CFR Part 171)** presumes interference with
+access/exchange/use of EHI is prohibited unless a recognized exception
+applies. Gating a patient's own access on consent status is not information
+blocking under the Privacy Exception's conditions — the real, currently
+undocumented exposure is any future design that limits what a patient's own
+portal, or a third-party app they authorized, can pull from their *own*
+record outside a recognized exception (distinct from the research-export
+question, §11). **TEFCA** requires (as of Jan 1 2026) exchange to conform to
+USCDI v3; no regulation mandates TEFCA/QHIN participation — it's
+incentive-shaped via information-blocking exposure, not a hard requirement —
+so HInS doesn't need QHIN capability to launch, but "eventually interoperate
+via TEFCA" is a real near-term direction worth naming explicitly.
+
+**03.8 ABDM FHIR Implementation Guide and NHCX — the real HIP conformance
+target.** §03.2's "FHIR R4 bundles" is accurate but names no actual
+conformance target — there is one: NRCeS's **FHIR Implementation Guide for
+ABDM**, R4-based (the same base Medplum already runs), reported at
+v6.5.0–v7.0.0 depending on source — confirm the current number against
+`nrces.in/ndhm/fhir/r4/` before citing one specifically. It defines seven
+Composition-based "record" document profiles, one per ABDM Health
+Information type (`OPConsultRecord`, `DischargeSummaryRecord`,
+`DiagnosticReportRecord`, `PrescriptionRecord`, `WellnessRecord`,
+`ImmunizationRecord`, `HealthDocumentRecord`, plus `InvoiceRecord` for
+billing), each packaged in a shared `DocumentBundle` profile, over ~25–34
+underlying resource profiles (`Patient`, `Encounter`, `Condition`,
+`MedicationRequest`, six specialized `Observation` sub-profiles, split
+`DiagnosticReportLab`/`DiagnosticReportImaging`, etc.). **This is a literal,
+resource-level gap, not an aspirational one: `apps/web` produces raw Medplum
+FHIR resources but does not assemble any of the seven ABDM Composition
+"Record" bundles.** That's the specific, scoped difference between
+"FHIR-native" (already true) and "ABDM M2/HIP-conformant" (not yet true) —
+and the actual precondition for §04's already-built consent-approval
+mechanics to have anything valid to hand over once a request is approved.
+Closing the consent-ownership gap (2026-10-18) made the *authorization*
+correct; it doesn't make the *exchange* real. The real HIU-side protocol: the
+HIU calls `/consent-requests/init` on the ABDM Gateway (callback-based);
+transfer requests carry the consent ID plus the HIU's ECDH public key
+(Curve25519) and a nonce; bundles are AES-256-GCM encrypted via a scheme
+called **Fidelius**, the Gateway itself never seeing plaintext — the concrete
+mechanism behind §04.2's existing "no central repository" claim. The real
+consent artefact also carries a per-artifact ephemeral encryption keypair and
+a storage-duration field distinct from the validity window — both currently
+absent from §04.1's ledger schema, needed before real HIP/HIU
+interoperability, independent of the §16 build-vs-integrate-a-consent-manager
+question. **NHCX** (National Health Claims Exchange, live since mid-2024,
+NHA+IRDAI, FHIR-based) is explicitly a router, not a repository — the same
+"data-blind-router" principle as the DPDP Consent Manager (§03.1a) and ABDM's
+HIE-CM, appearing a third time in India's regulatory pattern — using the same
+`Claim`/`ExplanationOfBenefit`/`Coverage` resource family Medplum already
+supports natively for the US billing path (§13), meaning the India side of
+the still-unbuilt RCM module may need *less* custom work than the US side,
+not more, once the shared FHIR model is right. Sources genuinely disagree on
+whether NHCX onboarding is IRDAI-mandated or voluntary-but-encouraged —
+resolve before committing a build-order slot (§13), since mandatory-vs-
+voluntary materially changes priority.
+
+> **Not legal advice.** §03 synthesizes public secondary sources — most
+> claims re-verified by live research as of 2026-10-19, several explicitly
+> flagged above where sources disagreed or a primary legal text couldn't be
+> retrieved/confirmed. Treat it as a briefing for counsel, not a substitute —
+> especially the Second Schedule's actual text, the research-warehouse
+> Data-Fiduciary question, the SDF-designation question, and anywhere a date
+> or figure is flagged as "disputed" or "unconfirmed" above.
 
 ## 04 — Consent management architecture
 
@@ -151,7 +450,8 @@ record:
 |---|---|
 | `consent_id` | Unique, immutable — the audit anchor |
 | `type` | `data_sharing` (ABDM) · `treatment_authorization` (HIPAA) · `research` (ICMR) · `recording` (voice/video, §08) · `marketing` |
-| `grantor` | Patient, or guardian/LAR for minors and persons with disabilities |
+| `research` sub-type | **Not yet distinct values, per §03.6 research findings:** ICMR names five ethics-committee-approvable research-consent kinds — broad consent (reusable for future not-yet-specified studies within set bounds), verbal/oral consent, group consent, waiver of consent, re-consent. Today's single `type=research` can't tell a reusable broad grant from a one-time narrow one — exactly the distinction an ethics committee requires trackable, and that any future research-cohort auto-matching feature needs to not over- or under-reach |
+| `grantor` | Patient, or verified parent/guardian (DPDP §9/Rule 10) for minors, or LAR for persons with disabilities — see §04.4, this is schema-present but not yet functionally distinct from the patient actor in the built approve/deny flow |
 | `scope` | In-scope health information types — never "everything" |
 | `purpose_code` | Self-use · treatment · payment · research — bound to the request |
 | `requester` | The specific HIU/system/study requesting access |
@@ -172,9 +472,19 @@ distribution list, and tracks per-recipient confirmation (risk + test case in
 §15, §14 TC-02).
 
 **04.4 Guardians, minors, emergency override.** A distinct legally-authorized-
-representative grantor type, not a workaround on the patient's account. A
-separate break-glass path (§09) allows emergency access without prior
-consent — logged, time-boxed, mandatory 24-hour post-hoc review.
+representative grantor type, not a workaround on the patient's account — that
+was always the *intent*, but **per the 2026-10-18 consent-ownership fix, the
+built system only ever accepts the patient's own resolved Medplum identity**;
+`grantor.representative` is schema-present, not functionally usable, and this
+is a live DPDP Section 9/Rule 10 gap today (§03.1), not a hypothetical one —
+St. Jones already has a pediatrics department (§02). Closing it needs
+**three** distinct actor types, not two: (1) the patient; (2) a **verified**
+parent/guardian per Rule 10 — with an actual identity-*and*-relationship
+verification step, not a self-certifying checkbox; and (3), separately, a
+pediatric research participant's own **assent** alongside parental consent
+(ICMR's distinct concept for research specifically, §03.3). A separate
+break-glass path (§09) allows emergency access without prior consent —
+logged, time-boxed, mandatory 24-hour post-hoc review.
 
 **04.5 Consent UX.** Plain-language notices, one per purpose. Every active
 grant visible and revocable from the patient portal in one action. Recording
@@ -342,6 +652,47 @@ top of the confirmed core, never a fork of it.
 - **No autonomous writes.** No AI function places an order, signs a note, or
   commits a chart entry on its own.
 
+**08.4 Minimum necessary — a per-function access scope, not a prompt
+instruction.** HIPAA's minimum-necessary standard (45 CFR §164.502(b),
+§164.514(d)) governs an AI feature's read access to the chart as an internal
+**use**, not a provider-to-provider treatment **disclosure** — the
+§164.502(b)(2)(i) treatment exception does **not** cover this.
+§164.514(d)(5) specifically bars using or requesting an entire medical record
+absent a function-specific justification. The default engineering
+temptation — give every AI function the whole FHIR Patient compartment and
+let the model sort out relevance — is exactly the pattern this standard
+rules out. **A system-prompt instruction telling the model to "only use
+relevant information" is not a data-access control** — unenforced below the
+model layer, unauditable as a boundary, bypassable by prompt injection or a
+silent model-version change, and gives no artifact to show an OCR
+investigator "here is what this call was permitted to see, and proof it saw
+only that." The concrete design: **every AI function gets its own Medplum
+Bot identity, and every Bot identity gets its own Access Policy**, scoped to
+the resource types, date range, and patient compartment that function
+specifically needs — enforced by Medplum's native ABAC (§10), not
+application-code convention. §08.2's care-setting table already implies the
+right shape (OPD scopes to a single Encounter; discharge summaries
+legitimately scope to the full stay — the specifically-justified full-record
+case §164.514(d)(5) allows); this should become an explicit, named,
+per-function scope table, one row per AI function, each with its
+justification written down. Every AI call's audit log entry (§09) should
+record **which FHIR resources were actually assembled into that call's
+context**, not only that a call happened — the artifact that makes
+minimum-necessary demonstrable after the fact, and doubles as the
+"clinician can independently review the basis for the recommendation"
+evidence relevant to staying on the non-device side of the FDA boundary
+(§09.1). This also reframes something already true but implicit: the
+three-tier AI model above (local / self-hosted open-weight / frontier) is
+itself the single most important BAA-and-minimum-necessary-reducing design
+decision in the architecture, since every call staying in tiers 1–2 needs
+zero BAA and has no external disclosure to scope at all — worth promoting to
+a named compliance control in §09, not left implicit here. Separately:
+HInS's self-hosted posture is a genuine HIPAA advantage, not just a privacy
+one — because Medplum, Keycloak, and the custom services are the covered
+entity's own systems rather than SaaS, "who is a business associate"
+collapses to just the AI Gateway's *external* frontier calls, materially
+shrinking the BAA surface versus a cloud-EHR-plus-bolt-on-AI architecture.
+
 ## 09 — Security architecture
 
 | Control | Approach |
@@ -354,6 +705,25 @@ top of the confirmed core, never a fork of it.
 | Breach response | Parallel HIPAA (60-day) and DPDP (Data Protection Board) workflows, auto-routed by tenant compliance mode |
 | Data residency | Per-tenant pinning — India tenants default in-country, US tenants to a US region |
 | Session handling | Short idle timeout on shared clinical workstations; longer, re-authenticated sessions for admin desks |
+
+**09.1 FDA SaMD boundary — where it will actually bite.** 21st Century Cures
+Act §520(o)(1)(E) excludes "non-device" clinical decision support from FDA
+regulation only if software (1) does not acquire, process, or analyze a
+medical image, IVD signal, or signal-acquisition pattern; (2) only
+displays/analyzes/prints medical information; (3) supports rather than
+replaces a clinician's recommendation; and (4) lets the clinician
+independently review the basis for that recommendation. **Criterion 1 is
+unconditional — there is no "advisory only" exception for image or signal
+analysis.** Any future AI feature reading a DICOM image or a waveform (an
+imaging pre-read flag, an ECG anomaly detector — directly relevant to the
+not-yet-built RIS/PACS module, §05/§13) is categorically outside the
+non-device carve-out regardless of how clinician-reviewed it's designed to
+be, and needs a real FDA pathway (510(k)/De Novo/PMA) chosen **before** it's
+built, not discovered after. Text-only CDSS/ambient-documentation features
+stay on the advisory, non-device side as long as criterion 4 holds in
+practice — the direct regulatory argument, not just a quality one, for
+keeping §08.3's groundedness check against source chart data as a hard
+requirement, and for §08.4's per-call "what did it actually see" audit log.
 
 ## 10 — RBAC, ABAC & multi-tenant white-label
 
@@ -402,19 +772,140 @@ FHIR Subscriptions handle event-driven integration without polling.
 | Localization | English + Hindi + configurable regional languages per tenant, including voice-scribe language support |
 | Scalability | Horizontal scaling per domain service; multi-tenant from day one |
 
+## 12a — Required team & expertise
+
+Everything built so far (consent-service, deid-service, audit-service,
+`apps/web`, scheduling, the RBAC/Keycloak hardening) has been fullstack
+engineering on the Fastify+Zod+Drizzle+Postgres+Medplum pattern, and the
+swarm-build process (Decisions log, 2026-10-18) has shown that pattern scales
+to parallel execution well. The gaps found across §03–§09 above need real
+domain expertise an engineering team can't safely assume by default —
+several (guardian-consent verification, research-consent sub-typing, the
+breach-notification trigger, minimum-necessary AI scoping) are requirements
+an engineering team can't correctly scope without a domain specialist naming
+the requirement first, because it isn't in this document and isn't something
+a generalist compliance search reliably surfaces.
+
+| Role | Owns, on HInS specifically | When needed | Risk if missing |
+|---|---|---|---|
+| **Fullstack developer(s)** | Bed/ward management, pharmacy dispensing, inventory; continues the proven service pattern | Continuously, through Phase 02–03 | Growing module surface without proportional review discipline risks a repeat of the notification-bell regression at higher stakes (a billing double-charge, a bed double-assignment) |
+| **Forward-Deployed Engineer (FDE)** | Embeds with the first *real* (non-reference) hospital tenant: maps its existing patient-ID scheme into Medplum, reconciles its real (likely inconsistent, partly-paper) data into FHIR, configures its Access Policies against its real org chart, owns the ABDM M1→M2→M3 sandbox-to-production certification specifically (hands-on, NHA-liaison-heavy work) | The moment a real hospital signs — not before | Without this role, go-live either stalls the roadmap while the core team context-switches into one-off firefighting, or customer hacks get hard-coded into shared services, breaking the multi-tenant isolation (§10) every *other* tenant depends on |
+| **AI/ML engineer** | The self-hosted-Whisper migration (domain fine-tuning per care setting, §08.2 — stock Whisper's published 19–33% WER on clinical audio is characterized in the literature as "not suitable for unsupervised clinical use"), the groundedness checker (§08.3), terminology-grounded CDSS once §03.6/§03.7 are live | Now, for Whisper specifically (the most concretely numbers-backed open gap found); CDSS waits on medication coding | Shipping browser-`SpeechRecognition`→Whisper as a pure infra swap, with no per-setting WER validation, risks the exact "inpatient misattribution = patient-safety incident" scenario §08.2 already names |
+| **Agentic-workflow/orchestration engineer** | Least-privilege tool-scoping, per-tool-call auditability, interruptibility, and the judgment that "human-in-the-loop" doesn't reduce risk if the reviewer can't actually exercise the checkpoint in the time they have | **Not yet, and that's a defensible answer** — §08.3's "no AI function places an order, signs a note, or commits on its own" keeps this role's risk surface inapplicable today. Activates the moment that principle is ever relaxed | Hiring too early is premature; not naming the trigger risks a future multi-step agent feature (drafting-and-queuing a lab order, a multi-step prior-auth) shipping with the same ad hoc prompt-chaining that works for a single-shot call |
+| **DPDP compliance officer / incoming DPO** | SDF-readiness (DPIA cadence, independent-auditor relationship, algorithmic due-diligence over §08), the guardian/representative gap as an owned item, the research-warehouse Data Fiduciary question (§03.1) | Now, at least fractionally — the DPIA artifact and the guardian-consent fix are themselves engineering-blocking, and "DPO" is a named, India-resident role that can't be conjured retroactively on SDF notification | The guardian-consent gap ships into a real pediatric tenant with no one having flagged it as the Section 9 violation it concretely is — not hypothetical, pediatrics is already in the reference deployment |
+| **HIPAA Security Officer & Privacy Officer** (one person, two titles) | The formal §164.308(a)(1) risk analysis (undocumented today), the BAA registry and its re-verification cadence, minimum-necessary sign-off on each new RBAC role, §08.4's per-function AI Access-Policy rollout | **Now — unconditionally, zero staging delay** | A real breach today has no documented risk-analysis trail to demonstrate reasonable diligence — the exact standard HIPAA enforcement hinges on |
+| **Clinical informaticist / terminology specialist** | SNOMED CT India affiliate registration + CDCI drug-extension integration (§03.6), the US Core/USCDI crosswalk (§03.7), ABDM Composition "Record" bundle assembly (§03.8) — terminology-content knowledge plus FHIR profiling mechanics, a distinct skill from backend engineering | Now, to unblock medication coding specifically — a hard dependency for pharmacy and any drug-interaction CDSS | Medications stay free-text indefinitely by default/inertia rather than a deliberate roadmap decision, foreclosing an entire category of CDSS value without anyone making that trade-off explicitly |
+| **Security/InfoSec engineer** | The HIPAA-proposed-bar controls (MFA, segmentation, scan/pen-test cadence) regardless of NPRM finalization, plus ABDM's WASA/Safe-to-Host security-audit coordination (a CERT-In/STQC-empanelled third-party audit, a named prerequisite for ABDM production credentials) | Alongside the FDE role, once ABDM production credentialing is in view | No one owns the WASA audit relationship, stalling ABDM production access even after the FHIR-profile work is done |
+| **Interoperability/integration engineer (HL7v2/DICOM)** | HL7v2 segment-level parsing, DICOM conformance, legacy-instrument bridging for LIS/RIS-PACS | Phase 02 (Diagnostics) | "Fullstack developer" undersells how different HL7v2 interface work is from a Mantine form — understaffing this risks the most expensive single subsystem running long with the wrong skill mix |
+| **Clinical Safety Officer** (clinically qualified) | A living Hazard Log + Clinical Safety Case across every future feature (the ward-rounds voice-misattribution risk, §08.2, is already written as exactly this kind of hazard-log entry, just not in that formal shape); a pre-go-live sign-off gate; each hospital tenant separately signing off on its own local configuration risk (the UK DCB0129/0160 two-tier pattern this role is modeled on — an analogy, not a claimed India/US legal requirement) | Before the first real patient encounter — a go-live gate | The next patient-safety-shaped risk (bed management, pharmacy dispensing, lab-result routing are all still ahead) has no standing process guaranteed to catch it, unlike the ward-rounds one which was caught only because someone happened to think it through |
+| **RCM/billing & pharmacy domain SMEs** | US insurance-claims complexity (837/835 EDI, payer adjudication rules), controlled-substance dispensing regulations | Phase 02–03 | Both modules get built functionally but not correctly — a domain-correctness risk distinct from a code-quality one |
+| **ABDM/NHCX integration specialist** | The Fidelius encryption scheme, gateway callback shape, NHCX's maturing adoption status (§03.8) | Once ABDM/NHCX moves from design to build | Generic FHIR competence doesn't cover ABDM-specific protocol mechanics — a specialization gap, not a staffing-level one |
+
+**Tier 1 — minimum viable team (next 2–3 phases):** 2–3 fullstack developers
+(full-time, swarm pattern already proven); a clinical informaticist
+(fractional now, growing by Phase 02) to resolve SNOMED CT India/CDCI; a
+HIPAA Security+Privacy Officer (fractional now, mandatory before any real
+PHI); a DPDP compliance advisor/incoming DPO (fractional, advisory); an
+AI/ML engineer (fractional-to-full-time, Whisper fine-tuning first).
+Explicitly **not yet needed**: an FDE (no real hospital tenant yet), an
+Agentic-Workflow Engineer (no multi-step, write-capable agent feature
+exists), a dedicated Clinical Safety Officer hire (the informaticist can
+wear that hat short-term, should become distinct before any real patient
+encounter).
+
+**Tier 2 — full team for the complete build:** everything in Tier 1, plus an
+FDE (first real hospital signs); a dedicated Clinical Safety Officer (before
+first real patient encounter); an Agentic-Workflow Engineer (the moment a
+multi-step, write-capable AI feature is actually planned); a full-time,
+India-resident DPO (on SDF notification, or proactively ahead of ~May 2027);
+RCM/billing and pharmacy/drug-terminology specialists (Phase 02–03); an
+HL7v2/DICOM interoperability specialist (Phase 02); an ABDM/NHCX integration
+specialist.
+
+**Open questions for the user:** Is Tier 1 staffable now, or does the
+swarm/agent-based build pattern continue longer before human hires beyond
+the fractional compliance/informaticist roles? When is the first real
+hospital tenant realistically expected — the FDE hiring trigger? Can an
+existing team member hold the named HIPAA Security/Privacy Officer titles
+immediately (legally required today), or does this need an external hire
+before any real PHI is handled? Is a clinically-qualified Clinical Safety
+Officer recruitable via a hospital-partner secondment, or does this need a
+standalone hire?
+
 ## 13 — Phased roadmap
 
-Sequenced by dependency, not calendar.
+Sequenced by dependency, not calendar. Subsystem detail, FHIR-resource
+mapping, and the recommended build order's rationale are in §13a below —
+this table is the summary.
 
 | Phase | Focus | Depends on |
 |---|---|---|
 | 00 — Foundations | Identity/IAM, Consent Service, Terminology Service, Medplum FHIR core, audit logging, security baseline | — |
-| 01 — Core clinical MVP | **Started 2026-10-15** — registration, OPD/encounter notes, e-prescribing, and consent recording are built and verified (`apps/web`). Not yet: scheduling, bed management, inpatient-specific workflow beyond note-taking | Phase 00 |
-| 02 — Diagnostics | LIS and RIS/PACS via the integration engine | Phase 01 |
-| 03 — Financial & admin | RCM/billing, ERP, HR, supply chain | Phase 01 |
-| 04 — AI-first layer | AI Gateway, ambient voice documentation, CDSS, guardrails | Phase 01 clinical system working without AI first |
-| 05 — Patient-facing & interop | Patient portal, telehealth, ABDM/ABHA integration, SMART on FHIR ecosystem | Phase 01–02 |
-| 06 — Analytics, research & scale | Research warehouse + export policy, IoMT ingestion, white-label hardening | Phase 03–05 |
+| 01 — Core clinical MVP | **Started 2026-10-15** — registration, OPD/encounter notes, e-prescribing, consent recording, and scheduling with practitioner double-booking detection are built and verified (`apps/web`) | Phase 00 |
+| 01a — Bed/ward management | `Encounter.location`-based admission/transfer/discharge, real-time census; **deliberate per-bed `Schedule`/`slotCapacity` design — does not inherit from the existing practitioner-double-booking work (§13a)** | Phase 01 |
+| 02 — Diagnostics | LIS and RIS/PACS via the integration engine — **gated on the AGPL/GPL legal review (§07/§16) resolving first**, since it determines which anchors (OpenELIS, Orthanc) are usable at all; the FDA SaMD boundary (§09.1) must be settled before any imaging-AI feature is added here, not after | Phase 01, AGPL review |
+| 02a — Pharmacy dispensing | `MedicationDispense`/`MedicationAdministration` plumbing now; real interaction-checking gated on §03.6's medication-coding resolution | Phase 01, §03.6 |
+| 03 — Financial & admin | US-path RCM/billing (Medplum-native — Visits auto-generates `ChargeItem`/`Claim`; Stedi/Candid Health vendor integration) **before** India-path NHCX integration (externally-maturing dependency, §03.8); ERP, HR, supply chain built pragmatically as a bounded service rather than on FHIR's immature `InventoryItem` (§13a) | Phase 01 |
+| 04 — AI-first layer | AI Gateway, ambient voice documentation (self-hosted Whisper, domain-tuned per §08.2 care setting), CDSS (gated on terminology-service + medication coding), guardrails — plus §08.4's per-function Access-Policy minimum-necessary redesign, built in, not bolted on after | Phase 01 clinical system working without AI first |
+| 05 — Patient-facing & interop | Patient portal (SMART App Launch v2.2.0, not an unscoped aspiration, §03.7), telehealth, ABDM/ABHA integration **against the actual ABDM FHIR IG Composition profiles (§03.8)**, not a loosely-modeled consent artefact alone | Phase 01–02 |
+| 06 — Analytics, research & scale | Research warehouse + export policy (distinguishing DPDP's Second-Schedule exemption from ICMR's separate ethics-committee regime, §03.1), IoMT ingestion, white-label hardening | Phase 03–05 |
+
+### 13a — Hospital Management System: subsystem scope, FHIR mapping, build order
+
+| Subsystem | FHIR mapping | Medplum-native today | Relative size | Primary risk |
+|---|---|---|---|---|
+| Bed/ward/inpatient | `Encounter` for the whole stay — `Encounter.location` is a *repeating* list, giving full location history; `Encounter.hospitalization.dischargeDisposition` for outcome | Partial — Encounter exists; **a `Location` on an `Appointment` does not reserve capacity, per Medplum's own docs** — bed-conflict prevention does not come free from the existing double-booking work; needs each bed as its own `Schedule` with `slotCapacity: 1`, or a direct `Encounter.location` overlap check | Weeks | Patient-safety-adjacent correctness, not technical novelty |
+| Pharmacy dispensing | `MedicationRequest` (built) → `MedicationDispense` → `MedicationAdministration` | Partial — MedicationRequest exists; Dispense/Administration not built | Weeks of plumbing; clinical value gated on §03.6 | Inherited from the unresolved medication-coding gap, not this subsystem's own design |
+| LIS/RIS-PACS | `ServiceRequest` (order) → `DiagnosticReport` (result) → `Specimen`/`ImagingStudy` | Low — needs a real DICOM runtime plus, for labs, historically-HL7v2 instrument integration | Multi-month — the largest of the six | Real integration surface, **plus the AGPL-3.0 review (§07/§16) is now a hard gate, not a parallel track**, since it decides which anchors (OpenELIS/Orthanc) are usable at all |
+| Billing/RCM (US) | `Coverage`→`CoverageEligibilityRequest/Response`→`ChargeItem`/`ChargeItemDefinition`→`Claim`/`ClaimResponse`→`PaymentReconciliation`→`Invoice`/`Account`; `Task.businessStatus` for work queues | **Substantial — the most Medplum-native subsystem of all six.** Medplum documents a reference architecture plus two vendor paths (Stedi for real X12 837P/277CA/835; Candid Health for fuller RCM handoff); its Visits feature already auto-generates `ChargeItem`/`Claim` from an Encounter | Weeks-to-a-couple-months | Vendor contracting, not data modeling |
+| Billing/RCM + claims (India) | Same `Claim`/`Coverage`/`ExplanationOfBenefit` family, routed through NHCX (§03.8) instead of a US clearinghouse | None yet, but the shared FHIR layer is the same investment as the US path | A couple of months | External dependency on a still-maturing government platform; mandatory-vs-voluntary status disputed (§03.8) |
+| Inventory/supply chain | `SupplyRequest`→`SupplyDelivery`→`InventoryItem` — all FHIR R5 Trial-Use, Maturity Level 1, with zero known production implementations of `InventoryItem` per HL7's own resource index | None — the FHIR-native option is itself unproven here, unlike every other subsystem above | Weeks if built pragmatically as a bounded Postgres-backed service (the consent/deid/audit-service pattern); longer if insisting on strict FHIR-native modeling against an immature standard | The standard's own immaturity, not workflow complexity |
+
+**AI/automation value, per subsystem — specific, not generic:** bed/ward
+length-of-stay forecasting is a genuine planning aid for staff, never an
+auto-discharge/reassignment trigger (accuracy degrades sharply on
+atypical stays in every study found). Pharmacy interaction/allergy checks at
+dispense time (a second checkpoint distinct from prescribing time) stay
+advisory, same as §05's existing CDSS design. Imaging-triage/worklist
+prioritization is a mature, FDA-regulated category today (1,000+ FDA-cleared
+AI radiology devices), always conditioned on a physician reading every
+study — the AI reorders the queue, never replaces the read; no comparably
+mature AI application exists for lab-result interpretation specifically, a
+genuine finding of absence, not an oversight. Billing/RCM's most concretely
+cited agentic application is denial-reason-driven appeal drafting and
+prior-auth documentation assembly (a federal structured-denial-reason API
+mandate takes effect Jan 1 2027) — every credible pattern **drafts or
+assembles, never autonomously submits**; the submission decision and any
+medical-necessity judgment stay human — describe this to users as a
+staff-augmenting drafting pipeline, not "automated billing." Inventory
+demand-forecasting is mature and lower-stakes (a bad reorder costs money, not
+patient safety) — keep procurement sign-off human regardless.
+
+**Recommended build order:** (1) bed/ward first — highest FHIR maturity,
+builds directly on Encounter work already done, closes the most visible
+"not actually a hospital system yet" gap for the least cost, provided the
+capacity-reservation design is deliberately re-derived rather than assumed
+inherited; (2) billing/RCM US path second — substantially a wiring/vendor
+project already documented by Medplum, fast demonstrable value; (3)
+pharmacy's data plumbing third, in parallel with resolving §03.6 — build the
+Dispense/Administration chain now, treat real interaction-checking as
+blocked on that terminology decision; (4) NHCX/India billing fourth — same
+FHIR family as (2) but with real external-platform-maturity risk, better
+attempted once the US pattern is proven and §03.8's mandatory-vs-voluntary
+question is resolved; (5) inventory pragmatically alongside whichever of the
+above is in flight; (6) LIS/RIS-PACS last — correctly the most expensive,
+and the existing instinct to anchor it on unmodified third-party systems
+(Orthanc/OHIF/OpenELIS, §05/§07) rather than build native is well-founded,
+with the AGPL review now a hard prerequisite for this subsystem specifically.
+
+**Open questions for the user:** does this build order hold, or does a
+specific prospective hospital partner's own priorities override it (e.g. if
+the actual first tenant most needs pharmacy or lab first)? Is the AGPL/GPL
+legal review schedulable now, given it's now a hard gate on the single most
+expensive subsystem? Should NHCX's onboarding mandate be confirmed with
+NHA/IRDAI before committing a build-order slot to it? For inventory: the
+pragmatic custom Postgres-backed service now (recommended), or hold out for
+a stricter FHIR-native model as `InventoryItem` matures?
 
 ## 14 — Test & acceptance use cases
 
@@ -445,6 +936,13 @@ built.
 | Voice recording captured without logged consent | Privacy violation | Microphone access hard-blocked without a prior consent event (§08.1) |
 | Bahmni's AGPL→MPL/MIT relicensing (proposed Nov 2025) stays unresolved | Procurement uncertainty | Track the OpenMRS/Bahmni community decision before committing Bahmni as a dependency |
 | Dual-jurisdiction regulatory drift — HIPAA 2025 update still proposed, DPDP phased over 18 months | Compliance gaps as rules finalize | Configurable compliance mode (§03) + a named compliance calendar owner |
+| AI feature crosses into FDA-regulated SaMD territory with no chosen pathway | Regulatory/enforcement exposure, feature recall | §09.1's criterion-1 gate (image/signal analysis), checked before any RIS/PACS AI work starts, not after |
+| CDSS/AI feature uses a protected-class-correlated input with no documented bias evaluation | Section 1557 exposure (§03.4a), independent of HIPAA | A named bias-identification/mitigation step per AI function before it ships |
+| AI function's chart-read scope wider than its actual need, with no enforced/logged boundary | Undemonstrable minimum-necessary (§08.4) even if actual access happened to be reasonable | Per-function Bot identity + Access Policy (§08.4), logged per-call resource-assembly audit trail |
+| No named HIPAA Security Official / Privacy Official | Already-binding, unconditional HIPAA gap the moment real PHI touches the system | Name both roles (§12a) before any real PHI, not staged to a future phase |
+| Pediatric/guardian consent not functionally distinct from the patient's own consent | DPDP Section 9/Rule 10 violation, live today, not a future deadline | Three-actor consent model (§04.4) — patient, verified guardian, pediatric assent |
+| Medications stored as free text, no drug terminology wired up | No drug-interaction/allergy CDSS can run at all, for any prescription — not a degraded one | CDCI (India) / RxNorm (US) integration at `MedicationRequest.medicationCodeableConcept` (§03.6) |
+| Bed-conflict prevention assumed to inherit from the practitioner-double-booking work | A `Location` on an `Appointment` doesn't reserve capacity (Medplum's own docs) — two patients could be assigned the same bed | Dedicated per-bed `Schedule`/`slotCapacity` design or direct `Encounter.location` overlap check (§13a), not reused Appointment logic |
 
 ## 16 — Open decisions
 
@@ -511,7 +1009,58 @@ built.
 - **Voice-to-text production path** — swap the dev-only browser
   `SpeechRecognition` dictation for a self-hosted Whisper call behind the
   AI Gateway, per §08's actual design, before any real patient data goes
-  near it.
+  near it. Needs per-care-setting fine-tuning + WER validation before
+  trusting it unsupervised (§12a) — stock Whisper's clinical-audio WER is
+  characterized in the literature as "not suitable for unsupervised
+  clinical use."
+- **DPDP's SDF/breach/children/cross-border mechanics (2026-10-19 research
+  round, §03.1)** are not yet modeled as distinct from the general
+  compliance-mode toggle: (a) breach notification needs a detect-and-
+  notify-always India path that can legitimately diverge from a
+  risk-assessed US path for the *same* incident — TC-08 should assert this
+  divergence is correct, not a bug; (b) the pediatric guardian/assent
+  actor types (§04.4) are a live gap, not staged; (c) research consent
+  needs ICMR sub-typing (§04.1).
+- **Who is the Data Fiduciary for the cross-tenant research warehouse —
+  HInS, or each contributing hospital?** (§03.1, §11) Not resolved; affects
+  who owes the DPO/breach/grievance obligations for that data flow. Needs
+  a real legal opinion, not an engineering decision.
+- **DPDP's Second Schedule text (research exemption, Rule 16) has not
+  been retrieved/verified against the primary Gazette document** —
+  deid-service's architecture is directionally aligned but not confirmed
+  sufficient as a DPDP legal matter specifically (§03.1).
+- **HIPAA Expert Determination de-identification (§164.514(b)(1)) is
+  unimplemented** — a process/role gap (a qualified statistician's
+  engagement per release), not a code gap. Would unlock research exports
+  with real statistical utility (exact ages, fine geography) that Safe
+  Harbor's mandatory suppression currently destroys.
+- **Limited Data Set's missing Data Use Agreement** — §164.514(e)(1) makes
+  a signed DUA a legal precondition, not a best practice. Needs a
+  DUA-tracking workflow, not a deid-service code change.
+- **Is the "BAA registry gates any external AI call" claim (§08/§15) a
+  built, enforced mechanism, or still only a documented intention?** TC-09
+  should be checked for whether it actually verifies BAA-gating, not only
+  model-availability fallback.
+- **SNOMED CT India / CDCI affiliate-license registration (§03.6)** —
+  free and administrative, days-to-weeks, not yet started. Separately,
+  whether a hospital tenant deploying HInS commercially in India needs its
+  own MLDS sublicense (distinct from HInS's own affiliate registration)
+  is unresolved — needs counsel or a direct check with NRCeS.
+- **ABDM M1→M2→M3 sandbox-to-production certification, and the WASA/
+  Safe-to-Host security audit it requires (§12a, §03.8)** — not started;
+  natural owner is the FDE role once a real hospital tenant is in view.
+- **NHCX onboarding — mandatory (IRDAI) or voluntary-but-encouraged?**
+  (§03.8) Sources disagree; resolve before committing a build-order slot
+  to it (§13a).
+- **The AGPL/GPL licensing review (§07) is now a hard gate, not a parallel
+  track, on the LIS/RIS-PACS subsystem specifically (§13a)** — it decides
+  which anchors (OpenELIS, Orthanc) are legally usable at all before any
+  of that subsystem's engineering starts.
+- **US Core 6.1.0 / USCDI v3 conformance (§03.7)** — HInS's FHIR usage is
+  FHIR-*shaped* but not yet US-Core-*conformant*; and the ABDM FHIR
+  Implementation Guide's seven Composition "Record" bundles (§03.8) are
+  not yet assembled anywhere in `apps/web`. Both are the literal,
+  resource-level gap between "uses FHIR" and "actually interoperates."
 
 ## 17 — References
 
