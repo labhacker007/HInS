@@ -1,0 +1,370 @@
+#!/usr/bin/env node
+/**
+ * Seeds a real Keycloak realm to be the role source of truth for
+ * deid-service's and audit-service's admin-role checks (tenant_admin /
+ * compliance_officer) — replacing the hand-seeded `alert_subscriptions`
+ * Postgres table as an AUTHORIZATION input (blueprint §16's "no real
+ * Keycloak-integrated RBAC yet" gap). This does NOT touch Medplum login:
+ * practitioners/patients still sign into Medplum exactly as before;
+ * `resolveCaller()` in both services still resolves WHO is calling via
+ * Medplum's `GET /auth/me`. This script only sets up WHERE the role for
+ * an already-identified caller comes from.
+ *
+ * Mirrors scripts/seed/seed-demo-data.mjs's style: plain Node, fetch-
+ * based, clear console.log progress. Unlike that script, this one IS
+ * idempotent — safe to re-run any number of times (every step checks
+ * "does this already exist" before creating).
+ *
+ * What it creates in Keycloak (http://localhost:8080):
+ *   1. A realm named "hins-dev".
+ *   2. Two realm roles in it: "tenant_admin", "compliance_officer".
+ *   3. A confidential client WITH a service account
+ *      (serviceAccountsEnabled=true) inside hins-dev, meant for
+ *      deid-service/audit-service's own backend code to call Keycloak's
+ *      Admin REST API for role lookups — a real non-human service
+ *      identity, same principle as services/deid-service/src/medplumClient.ts's
+ *      client_credentials setup against Medplum (read that file for the
+ *      pattern this mirrors).
+ *   4. Two users in hins-dev, with username set to the Medplum
+ *      Practitioner id (the lookup key, matching how alert_subscriptions
+ *      is keyed today — NOT email):
+ *        - Medplum Admin's Practitioner id -> role tenant_admin
+ *        - Alex Fernandes's Practitioner id -> role compliance_officer
+ *      These users are never logged into directly. They exist purely so
+ *      the Admin REST API can look up role mappings by username.
+ *
+ * IMPORTANT, stated plainly rather than discovered the hard way later:
+ * this script EMPIRICALLY TESTS, at the end, whether the service
+ * account's own client_credentials token can actually do everything
+ * deid-service/audit-service need (the self-realm-management pattern:
+ * granting the service account the realm-management client's own
+ * roles). If that call fails for any reason on this Keycloak
+ * version/config, the script prints a clear WARNING rather than
+ * silently claiming success — see services/deid-service/README.md /
+ * services/audit-service/README.md for which path was actually shipped.
+ *
+ * The exact role set needed was found EMPIRICALLY, not guessed from
+ * Keycloak's docs alone — tried one at a time directly against this
+ * running instance:
+ *   - "view-users" + "query-users": GET /users and GET /users/{id}/
+ *     role-mappings/realm (the READ-side role lookup, activeRoleFor()).
+ *   - "view-realm": required additionally for GET /roles/{role-name}/users
+ *     (the role->users reverse lookup GET /subscriptions uses) — a 403
+ *     with only view-users/query-users, verified live; NOT documented
+ *     obviously anywhere as a prerequisite for that specific endpoint.
+ *   - "manage-users": required additionally for POST /users (creating a
+ *     user) and POST /users/{id}/role-mappings/realm (assigning a role)
+ *     — the WRITE side POST /subscriptions now does. view-users alone
+ *     403s on both, verified live.
+ * All four are granted below. A real deployment that only ever needs
+ * the READ side (e.g. if it keeps the old 410-Gone fallback for the
+ * write endpoints instead) could drop "manage-users" — not done here
+ * since this task's chosen design (§3a) needs real writes too.
+ *
+ * Usage:
+ *   node scripts/seed/seed-keycloak-roles.mjs
+ *
+ * Env overrides (defaults match infra/docker-compose.yml):
+ *   KEYCLOAK_BASE_URL, KEYCLOAK_BOOTSTRAP_ADMIN_USER, KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD
+ */
+const KEYCLOAK_BASE_URL = process.env.KEYCLOAK_BASE_URL ?? 'http://localhost:8080';
+const BOOTSTRAP_ADMIN_USER = process.env.KEYCLOAK_BOOTSTRAP_ADMIN_USER ?? 'admin';
+const BOOTSTRAP_ADMIN_PASSWORD = process.env.KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD ?? 'admin';
+
+const REALM = 'hins-dev';
+const SERVICE_CLIENT_ID = 'hins-rbac-service';
+
+// Medplum Practitioner ids this is keyed on (verified live against the
+// running HInS Dev Medplum project — see the task's own research notes,
+// not re-derived here).
+const USERS = [
+  { practitionerId: '65abe91c-d9bc-47e6-9d8a-c7f429eb3e67', displayName: 'Medplum Admin', role: 'tenant_admin' },
+  { practitionerId: '77a40d14-1767-4b2b-b754-52924b060826', displayName: 'Alex Fernandes', role: 'compliance_officer' },
+];
+
+async function fetchJson(url, { method = 'GET', body, form, token, allow404 } = {}) {
+  const headers = {};
+  let payload;
+  if (form) {
+    headers['content-type'] = 'application/x-www-form-urlencoded';
+    payload = new URLSearchParams(form);
+  } else if (body !== undefined) {
+    headers['content-type'] = 'application/json';
+    payload = JSON.stringify(body);
+  }
+  if (token) headers['authorization'] = `Bearer ${token}`;
+
+  const res = await fetch(url, { method, headers, body: payload });
+  if (allow404 && res.status === 404) return { status: 404, json: undefined, headers: res.headers };
+  const text = await res.text();
+  const json = text ? JSON.parse(text) : undefined;
+  if (!res.ok) {
+    throw new Error(`${method} ${url} -> ${res.status}: ${text}`);
+  }
+  return { status: res.status, json, headers: res.headers };
+}
+
+async function getAdminToken() {
+  const resp = await fetchJson(`${KEYCLOAK_BASE_URL}/realms/master/protocol/openid-connect/token`, {
+    method: 'POST',
+    form: {
+      grant_type: 'password',
+      client_id: 'admin-cli',
+      username: BOOTSTRAP_ADMIN_USER,
+      password: BOOTSTRAP_ADMIN_PASSWORD,
+    },
+  });
+  return resp.json.access_token;
+}
+
+/** Keycloak's admin API returns the created resource's id only via a
+ * `Location` response header (the POST body is empty) — this extracts
+ * the last path segment from it. */
+function idFromLocation(headers) {
+  const loc = headers.get('location');
+  if (!loc) return undefined;
+  return loc.split('/').filter(Boolean).pop();
+}
+
+async function ensureRealm(token) {
+  const existing = await fetchJson(`${KEYCLOAK_BASE_URL}/admin/realms/${REALM}`, { token, allow404: true });
+  if (existing.status !== 404) {
+    console.log(`Realm "${REALM}" already exists.`);
+    return;
+  }
+  await fetchJson(`${KEYCLOAK_BASE_URL}/admin/realms`, {
+    method: 'POST',
+    token,
+    body: { realm: REALM, enabled: true, displayName: 'HInS Dev (RBAC role source)' },
+  });
+  console.log(`Created realm "${REALM}".`);
+}
+
+async function ensureRealmRole(token, roleName) {
+  const existing = await fetchJson(`${KEYCLOAK_BASE_URL}/admin/realms/${REALM}/roles/${roleName}`, {
+    token,
+    allow404: true,
+  });
+  if (existing.status !== 404) {
+    console.log(`Realm role "${roleName}" already exists.`);
+    return existing.json;
+  }
+  await fetchJson(`${KEYCLOAK_BASE_URL}/admin/realms/${REALM}/roles`, {
+    method: 'POST',
+    token,
+    body: { name: roleName, description: `HInS admin role: ${roleName}` },
+  });
+  console.log(`Created realm role "${roleName}".`);
+  return fetchJson(`${KEYCLOAK_BASE_URL}/admin/realms/${REALM}/roles/${roleName}`, { token }).then((r) => r.json);
+}
+
+/** Returns { id, secret } for the service-account client, creating it
+ * (and regenerating/reading its secret) if it doesn't exist yet. */
+async function ensureServiceClient(token) {
+  const list = await fetchJson(
+    `${KEYCLOAK_BASE_URL}/admin/realms/${REALM}/clients?clientId=${encodeURIComponent(SERVICE_CLIENT_ID)}`,
+    { token }
+  );
+  let clientInternalId = list.json?.[0]?.id;
+
+  if (!clientInternalId) {
+    const created = await fetchJson(`${KEYCLOAK_BASE_URL}/admin/realms/${REALM}/clients`, {
+      method: 'POST',
+      token,
+      body: {
+        clientId: SERVICE_CLIENT_ID,
+        protocol: 'openid-connect',
+        publicClient: false,
+        serviceAccountsEnabled: true,
+        standardFlowEnabled: false,
+        directAccessGrantsEnabled: false,
+        description:
+          'Non-human service identity for deid-service/audit-service to call the Keycloak Admin REST API for role lookups (client_credentials grant).',
+      },
+    });
+    clientInternalId = idFromLocation(created.headers);
+    console.log(`Created service client "${SERVICE_CLIENT_ID}" (internal id ${clientInternalId}).`);
+  } else {
+    console.log(`Service client "${SERVICE_CLIENT_ID}" already exists (internal id ${clientInternalId}).`);
+  }
+
+  const secretResp = await fetchJson(
+    `${KEYCLOAK_BASE_URL}/admin/realms/${REALM}/clients/${clientInternalId}/client-secret`,
+    { token }
+  );
+  return { internalId: clientInternalId, secret: secretResp.json.value };
+}
+
+/** Grants the service account the realm-management client's
+ * "view-users", "query-users", "view-realm" and "manage-users" roles
+ * WITHIN hins-dev — the standard Keycloak self-realm-management pattern
+ * that lets a client's own service account read AND write user/role
+ * data in the SAME realm it lives in, without needing a separate admin
+ * realm. See this file's header for how this exact role set (not a
+ * smaller or larger one) was found empirically. */
+async function grantRealmManagementRoles(token, serviceClientInternalId) {
+  const saUser = await fetchJson(
+    `${KEYCLOAK_BASE_URL}/admin/realms/${REALM}/clients/${serviceClientInternalId}/service-account-user`,
+    { token }
+  );
+  const saUserId = saUser.json.id;
+
+  const clients = await fetchJson(`${KEYCLOAK_BASE_URL}/admin/realms/${REALM}/clients?clientId=realm-management`, {
+    token,
+  });
+  const realmManagementClientId = clients.json?.[0]?.id;
+  if (!realmManagementClientId) {
+    throw new Error('Could not find the built-in "realm-management" client in hins-dev — unexpected Keycloak setup.');
+  }
+
+  const availableRoles = await fetchJson(
+    `${KEYCLOAK_BASE_URL}/admin/realms/${REALM}/clients/${realmManagementClientId}/roles`,
+    { token }
+  );
+  const wanted = ['view-users', 'query-users', 'view-realm', 'manage-users'];
+  const rolesToGrant = availableRoles.json.filter((r) => wanted.includes(r.name));
+  if (rolesToGrant.length !== wanted.length) {
+    throw new Error(`Expected realm-management roles ${wanted.join(', ')}, found ${availableRoles.json.map((r) => r.name).join(', ')}`);
+  }
+
+  const current = await fetchJson(
+    `${KEYCLOAK_BASE_URL}/admin/realms/${REALM}/users/${saUserId}/role-mappings/clients/${realmManagementClientId}`,
+    { token }
+  );
+  const currentNames = new Set(current.json.map((r) => r.name));
+  const missing = rolesToGrant.filter((r) => !currentNames.has(r.name));
+  if (missing.length === 0) {
+    console.log(`Service account already has realm-management roles: ${wanted.join(', ')}.`);
+    return;
+  }
+
+  await fetchJson(
+    `${KEYCLOAK_BASE_URL}/admin/realms/${REALM}/users/${saUserId}/role-mappings/clients/${realmManagementClientId}`,
+    { method: 'POST', token, body: missing }
+  );
+  console.log(`Granted service account realm-management roles: ${missing.map((r) => r.name).join(', ')}.`);
+}
+
+async function ensureUserWithRole(token, { practitionerId, displayName, role }) {
+  const existing = await fetchJson(
+    `${KEYCLOAK_BASE_URL}/admin/realms/${REALM}/users?username=${encodeURIComponent(practitionerId)}&exact=true`,
+    { token }
+  );
+  let userId = existing.json?.[0]?.id;
+
+  if (!userId) {
+    const created = await fetchJson(`${KEYCLOAK_BASE_URL}/admin/realms/${REALM}/users`, {
+      method: 'POST',
+      token,
+      body: {
+        username: practitionerId,
+        enabled: true,
+        firstName: displayName,
+        // Never logged into directly (see file header) — a throwaway
+        // password only because Keycloak's create-user API requires
+        // one to exist in a usable state on some configs.
+        credentials: [{ type: 'password', value: `unused-${practitionerId.slice(0, 8)}`, temporary: false }],
+      },
+    });
+    userId = idFromLocation(created.headers);
+    console.log(`Created Keycloak user "${practitionerId}" (${displayName}), internal id ${userId}.`);
+  } else {
+    console.log(`Keycloak user "${practitionerId}" (${displayName}) already exists, internal id ${userId}.`);
+  }
+
+  const roleRep = await fetchJson(`${KEYCLOAK_BASE_URL}/admin/realms/${REALM}/roles/${role}`, { token });
+  const currentRoles = await fetchJson(`${KEYCLOAK_BASE_URL}/admin/realms/${REALM}/users/${userId}/role-mappings/realm`, {
+    token,
+  });
+  if (currentRoles.json.some((r) => r.name === role)) {
+    console.log(`  already has realm role "${role}".`);
+    return;
+  }
+  await fetchJson(`${KEYCLOAK_BASE_URL}/admin/realms/${REALM}/users/${userId}/role-mappings/realm`, {
+    method: 'POST',
+    token,
+    body: [roleRep.json],
+  });
+  console.log(`  assigned realm role "${role}".`);
+}
+
+/** The empirical test called out in this script's header: does the
+ * service account's OWN client_credentials token actually work for the
+ * READ-side calls deid-service/audit-service's role lookup and
+ * GET /subscriptions need — GET /users (view-users/query-users) AND
+ * GET /roles/{role}/users (additionally needs view-realm, found
+ * empirically — see header). Does NOT exercise the WRITE side
+ * (manage-users: POST /users, POST role-mappings/realm) here, on
+ * purpose — this script is meant to be safely re-run, and a mutating
+ * test would either leave stray users behind or need its own cleanup
+ * logic for no real benefit; manage-users was verified empirically
+ * during this feature's build via direct curl calls (see this task's
+ * summary/README for the record), and is simple enough
+ * (same Admin REST API, well-documented write endpoints) not to need a
+ * live check on every seed run. Returns true/false rather than
+ * throwing, so the caller can decide what to tell the operator. */
+async function testServiceAccountCanListUsers(clientId, clientSecret) {
+  try {
+    const tokenResp = await fetchJson(`${KEYCLOAK_BASE_URL}/realms/${REALM}/protocol/openid-connect/token`, {
+      method: 'POST',
+      form: { grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret },
+    });
+    const saToken = tokenResp.json.access_token;
+    const usersRes = await fetch(`${KEYCLOAK_BASE_URL}/admin/realms/${REALM}/users?max=1`, {
+      headers: { authorization: `Bearer ${saToken}` },
+    });
+    if (!usersRes.ok) return false;
+    const roleUsersRes = await fetch(`${KEYCLOAK_BASE_URL}/admin/realms/${REALM}/roles/tenant_admin/users`, {
+      headers: { authorization: `Bearer ${saToken}` },
+    });
+    return roleUsersRes.ok;
+  } catch (err) {
+    console.log(`  empirical test threw: ${String(err)}`);
+    return false;
+  }
+}
+
+async function main() {
+  console.log(`Seeding Keycloak realm "${REALM}" at ${KEYCLOAK_BASE_URL} ...`);
+  const adminToken = await getAdminToken();
+  console.log('Authenticated to master realm as bootstrap admin.');
+
+  await ensureRealm(adminToken);
+  await ensureRealmRole(adminToken, 'tenant_admin');
+  await ensureRealmRole(adminToken, 'compliance_officer');
+
+  const { internalId, secret } = await ensureServiceClient(adminToken);
+
+  let selfManagementWorks = false;
+  try {
+    await grantRealmManagementRoles(adminToken, internalId);
+    selfManagementWorks = await testServiceAccountCanListUsers(SERVICE_CLIENT_ID, secret);
+  } catch (err) {
+    console.log(`WARNING: could not grant/verify realm-management roles for the service account: ${String(err)}`);
+  }
+
+  for (const u of USERS) {
+    await ensureUserWithRole(adminToken, u);
+  }
+
+  console.log('\n=== Done ===');
+  console.log(`Realm: ${REALM}`);
+  console.log(`Service client id: ${SERVICE_CLIENT_ID}`);
+  console.log(`Service client secret: ${secret}`);
+  console.log(
+    selfManagementWorks
+      ? 'Empirical test PASSED: the service account\'s own client_credentials token successfully called GET /admin/realms/hins-dev/users.\n' +
+          'Set these env vars for deid-service/audit-service (dev defaults already match this, see this script\'s source):\n' +
+          `  KEYCLOAK_BASE_URL=${KEYCLOAK_BASE_URL}\n  KEYCLOAK_SERVICE_CLIENT_ID=${SERVICE_CLIENT_ID}\n  KEYCLOAK_SERVICE_CLIENT_SECRET=${secret}`
+      : 'WARNING: Empirical test FAILED — the service account could NOT list users in its own realm via the ' +
+          'self-realm-management pattern (view-users/query-users on realm-management). See services/deid-service/README.md ' +
+          'and services/audit-service/README.md for which fallback was actually shipped (likely: the two services use the ' +
+          'master-realm bootstrap admin-cli credentials directly instead, stated plainly as a simplification, not presented ' +
+          'as the clean service-account design).'
+  );
+}
+
+main().catch((err) => {
+  console.error('Seed failed:', err);
+  process.exit(1);
+});

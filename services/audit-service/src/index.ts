@@ -15,6 +15,14 @@
  * polled by the clinician app's notification bell) — no email/SMS/pager
  * integration. That's a real gap for actual clinical alerting, not a
  * design choice to treat as finished; see this service's README.
+ *
+ * `alert_subscriptions` above is used ONLY for the notification-fanout
+ * purpose described in (1) — NOT for this service's admin-role
+ * authorization checks (GET/POST /subscriptions, the admin branch of
+ * GET /notifications) as of 2026-10-18. Those now read a real Keycloak
+ * realm instead; see `activeRoleFor()`'s and `keycloakRoles.ts`'s
+ * comments below for why these are deliberately two separate concerns
+ * now rather than one table serving both.
  */
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
@@ -24,6 +32,7 @@ import { and, desc, eq, ne } from 'drizzle-orm';
 import { db } from './db/client.js';
 import { editEvents, alertSubscriptions, notifications } from './db/schema.js';
 import { CreateSubscriptionSchema, ErrorResponseSchema, RecordEventSchema } from './schemas.js';
+import { activeRoleFromKeycloak, keycloakAssignRole, keycloakListRoleAssignments } from './keycloakRoles.js';
 
 const PORT = Number(process.env.PORT ?? 4005);
 const MEDPLUM_BASE_URL = process.env.MEDPLUM_BASE_URL ?? 'http://localhost:8103';
@@ -43,8 +52,9 @@ const MEDPLUM_BASE_URL = process.env.MEDPLUM_BASE_URL ?? 'http://localhost:8103'
  *   - `GET /oauth2/userinfo` (standard OIDC, Medplum supports it) only
  *     returns `{"sub": "<User id>"}` — curl-verified. That's the User
  *     resource id, not the Practitioner/profile id this service's role
- *     table (`alert_subscriptions.practitionerId`) is keyed on, so it
- *     can't drive the role check by itself.
+ *     lookup (now a Keycloak username, see `keycloakRoles.ts`; formerly
+ *     `alert_subscriptions.practitionerId`) is keyed on, so it can't
+ *     drive the role check by itself.
  *   - The approach floated when this task was scoped — forward the
  *     caller's own token to `GET /fhir/R4/Practitioner/{claimedId}` and
  *     check it returns 200 for the id the caller claims — was tried
@@ -94,16 +104,19 @@ async function resolveCaller(authHeader: string | undefined): Promise<AuthedCall
   return { practitionerId: ref.slice('Practitioner/'.length), practitionerName: body?.membership?.profile?.display ?? ref };
 }
 
-/** This table is audit-service's own schema and already models exactly
- * "which practitioner has which role for alerting/admin purposes" — see
- * db/schema.ts's header. Reused directly rather than inventing a second
- * role table that could drift from it. */
+/**
+ * Role source of truth for this service's admin-role check, as of
+ * 2026-10-18: a real Keycloak realm (`hins-dev`), not the hand-seeded
+ * `alert_subscriptions.role` column this used to query. `alert_subscriptions`
+ * itself is NOT retired — `POST /events` below still uses it, unchanged,
+ * for a different purpose (who gets notified on an edit). Only its use
+ * as an AUTHORIZATION input is replaced here. See
+ * services/audit-service/src/keycloakRoles.ts's file header for the
+ * full design (service-account client_credentials lookup, fail-closed
+ * behavior, caching).
+ */
 async function activeRoleFor(practitionerId: string): Promise<string | undefined> {
-  const [row] = await db
-    .select({ role: alertSubscriptions.role })
-    .from(alertSubscriptions)
-    .where(and(eq(alertSubscriptions.practitionerId, practitionerId), eq(alertSubscriptions.active, true)));
-  return row?.role;
+  return activeRoleFromKeycloak(practitionerId, (msg, err) => app.log.error({ err }, msg));
 }
 
 /** preHandler-shaped guard for the two admin-only /subscriptions routes.
@@ -126,7 +139,7 @@ async function requireAdminCaller(req: FastifyRequest, reply: FastifyReply): Pro
     reply.code(403);
     reply.send({
       error: 'forbidden',
-      message: `This endpoint requires an active alert_subscriptions role of ${ADMIN_ROLES.join(' or ')}. Caller Practitioner/${caller.practitionerId} has ${role ?? 'no'} role.`,
+      message: `This endpoint requires a Keycloak realm role of ${ADMIN_ROLES.join(' or ')} (realm "${process.env.KEYCLOAK_REALM ?? 'hins-dev'}"). Caller Practitioner/${caller.practitionerId} has ${role ?? 'no'} role.`,
     });
     return undefined;
   }
@@ -242,7 +255,7 @@ app.get(
         reply.code(403);
         return reply.send({
           error: 'forbidden',
-          message: `You may only read your own notifications (recipientId must equal your own practitioner id, Practitioner/${caller.practitionerId}), or hold an active alert_subscriptions role of ${ADMIN_ROLES.join(' or ')} to read anyone's.`,
+          message: `You may only read your own notifications (recipientId must equal your own practitioner id, Practitioner/${caller.practitionerId}), or hold a Keycloak realm role of ${ADMIN_ROLES.join(' or ')} to read anyone's.`,
         });
       }
     }
@@ -285,26 +298,60 @@ app.post(
   }
 );
 
-// Admin-only: role subscriptions decide who gets alerted on every edit,
-// and who else counts as an admin for this and deid-service's gated
-// endpoints — gated on requireAdminCaller (see its header comment for
-// how caller identity is resolved and verified against this gap being
-// closed; §16 still tracks the bigger "no real Keycloak-integrated RBAC
-// yet" item underneath this).
+// Admin-role management. As of 2026-10-18, these two endpoints do REAL
+// work against the Keycloak `hins-dev` realm — they used to manage rows
+// in `alert_subscriptions`, but once `activeRoleFor()` above stopped
+// reading that table for authorization, leaving these as plain
+// INSERT/SELECT against it would have been actively deceptive: an admin
+// calling POST /subscriptions would believe they'd just granted someone
+// an admin role, and nothing would actually change. Chosen fix (option
+// (a) from this task, not the 410-Gone fallback (b)): repoint both at
+// the Keycloak Admin REST API directly (services/audit-service/src/keycloakRoles.ts's
+// `keycloakAssignRole`/`keycloakListRoleAssignments`), fully retiring
+// `alert_subscriptions.role` as an authorization input. `alert_subscriptions`
+// the TABLE still exists and is still used by `POST /events` above for
+// its own, separate purpose (who gets an in-app notification on an
+// edit) — that is unchanged and intentionally out of scope here.
+//
+// Behavior change worth stating plainly: before this change, granting
+// an admin role via POST /subscriptions ALSO added that practitioner as
+// a notification subscriber (same table, same row). That side effect is
+// now gone — the two concerns ("is this caller an admin" vs. "who gets
+// notified on an edit") are fully decoupled, which is more honest than
+// the previous conflation, but it does mean a newly Keycloak-admin'd
+// practitioner does NOT automatically start receiving edit notifications
+// anymore; that still needs its own `alert_subscriptions` row (unchanged
+// mechanism, just no longer wired to this endpoint).
+//
+// Gated on requireAdminCaller (itself now Keycloak-backed — see its
+// header comment). Both routes 502 (not 500/200) if the admin WRITE/LIST
+// itself fails after the caller was already verified as admin — a real
+// operational error, surfaced honestly rather than swallowed.
 app.post(
   '/subscriptions',
   {
     schema: {
       body: CreateSubscriptionSchema,
-      response: { 201: z.object({ id: z.uuid() }), 401: ErrorResponseSchema, 403: ErrorResponseSchema },
+      response: {
+        201: z.object({ practitionerId: z.string(), practitionerName: z.string(), role: z.string() }),
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        502: ErrorResponseSchema,
+      },
     },
   },
   async (req, reply) => {
     const caller = await requireAdminCaller(req, reply);
     if (!caller) return;
-    const [row] = await db.insert(alertSubscriptions).values(req.body).returning();
+    try {
+      await keycloakAssignRole(req.body.practitionerId, req.body.practitionerName, req.body.role);
+    } catch (err) {
+      app.log.error({ err }, `Keycloak role assignment failed for practitioner ${req.body.practitionerId}`);
+      reply.code(502);
+      return { error: 'keycloak_error', message: 'Could not assign the role in Keycloak. See service logs.' };
+    }
     reply.code(201);
-    return { id: row.id };
+    return { practitionerId: req.body.practitionerId, practitionerName: req.body.practitionerName, role: req.body.role };
   }
 );
 
@@ -313,16 +360,23 @@ app.get(
   {
     schema: {
       response: {
-        200: z.array(z.record(z.string(), z.unknown())),
+        200: z.array(z.object({ practitionerId: z.string(), practitionerName: z.string(), role: z.string() })),
         401: ErrorResponseSchema,
         403: ErrorResponseSchema,
+        502: ErrorResponseSchema,
       },
     },
   },
   async (req, reply) => {
     const caller = await requireAdminCaller(req, reply);
     if (!caller) return;
-    return db.select().from(alertSubscriptions).where(eq(alertSubscriptions.active, true));
+    try {
+      return await keycloakListRoleAssignments();
+    } catch (err) {
+      app.log.error({ err }, 'Keycloak role-assignment list failed');
+      reply.code(502);
+      return { error: 'keycloak_error', message: 'Could not list role assignments from Keycloak. See service logs.' };
+    }
   }
 );
 
