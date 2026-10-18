@@ -48,7 +48,7 @@ export function ClinicianApp() {
             </Text>
           </Group>
           <Group gap="sm">
-            <NotificationBell practitionerId={profile?.id} />
+            <NotificationBell practitionerId={profile?.id} accessToken={medplum.getAccessToken()} />
             <Button
               variant="subtle"
               size="sm"

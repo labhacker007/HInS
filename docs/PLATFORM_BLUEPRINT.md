@@ -1,7 +1,7 @@
 # HInS Platform Blueprint
 
-**Project Development & Requirements Document · v0.7**
-Status: Draft — decisions in progress · Scope: India + US, dual-jurisdiction · Last updated: 2026-10-15
+**Project Development & Requirements Document · v0.8**
+Status: Draft — decisions in progress · Scope: India + US, dual-jurisdiction · Last updated: 2026-10-18
 
 A modular, API-first, AI-native hospital operating system — architecture, compliance
 framework, licensing strategy, and roadmap for a multi-specialty deployment spanning
@@ -42,7 +42,9 @@ Claude artifact: https://claude.ai/artifact/3NRZUR3SC5GoVQi3K1jWSw
 | 2026-10-15 | **Note editing with full version history**, and a real attribution mechanism found for it | Checked directly against the running Medplum instance before building anything: `meta.author` is not auto-populated on writes, and a client-supplied `meta.author` is silently discarded (`meta` is server-controlled) — confirmed the same way that `_history` with `meta.versionId`/`lastUpdated` per version works correctly. Attribution instead lives in `DocumentReference.author`, a normal FHIR field that persists like any data and is preserved per-version in history. Every create/edit sets it to the signed-in practitioner. Built for notes only; `MedicationRequest` editing isn't wired up yet (§16). History is clinician-facing only, not shown in the patient portal — a UX choice, not a limit. |
 | 2026-10-15 | **Voice dictation added, explicitly dev/demo only** | Uses the browser's native `SpeechRecognition` API — in Chrome, that sends audio to Google's cloud speech service, directly contradicting §08's self-hosted-by-default design. No self-hosted Whisper is running in this environment; this is what's real and demonstrable today, labeled as such in the UI next to the button, not quietly shipped as if compliant. What *is* built faithfully to §08.1: no microphone access without a logged `recording`-type consent first (auto-created via the Consent Service if none is active) — a verbal-confirmation simplification, not a captured e-signature, same as every other documented simplification in this codebase. |
 
-| 2026-10-18 | **deid-service + audit-service RBAC hardening**: `GET /audit` (deid-service), `GET`/`POST /subscriptions` and `GET /notifications` (audit-service) are no longer unauthenticated | Researched against the live Medplum instance before implementing (not guessed): `GET /oauth2/userinfo` only returns the User id, not the Practitioner id this needed; forwarding the caller's own token to `GET /fhir/R4/Practitioner/{claimedId}` and checking it returns 200 was tried and found **insecure** on this instance — this project's default Practitioner Access Policy lets any authenticated practitioner read any *other* Practitioner record too, so a claimed id isn't provable that way (verified: Dr. Sharma's real token successfully read Medplum Admin's Practitioner record). What works and isn't spoofable: Medplum's own `GET /auth/me`, which resolves the caller's Practitioner from the token's session server-side with no claimed id involved. Role check reuses `audit-service`'s existing `alert_subscriptions` table directly (role IN `tenant_admin`/`compliance_officer`) rather than a second role table. `GET /notifications` additionally checks the resolved caller's own id matches the requested `recipientId` unless they hold an admin role. Verified end-to-end with real tokens (admin@example.com and dr.sharma@stjones.example, who is seeded but deliberately not in `alert_subscriptions`): every gated endpoint correctly 401s with no token, 403s for Dr. Sharma, and 200s for admin. **Still open, stated in both services' READMEs and §16:** role source of truth is still the hand-seeded table, not real Keycloak RBAC; token validation is a live per-request call to Medplum, not local JWT verification. |
+| 2026-10-18 | **deid-service + audit-service RBAC hardening**: `GET /audit` (deid-service), `GET`/`POST /subscriptions` and `GET /notifications` (audit-service) are no longer unauthenticated | Researched against the live Medplum instance before implementing (not guessed): `GET /oauth2/userinfo` only returns the User id, not the Practitioner id this needed; forwarding the caller's own token to `GET /fhir/R4/Practitioner/{claimedId}` and checking it returns 200 was tried and found **insecure** on this instance — this project's default Practitioner Access Policy lets any authenticated practitioner read any *other* Practitioner record too, so a claimed id isn't provable that way (verified: Dr. Sharma's real token successfully read Medplum Admin's Practitioner record). What works and isn't spoofable: Medplum's own `GET /auth/me`, which resolves the caller's Practitioner from the token's session server-side with no claimed id involved. Role check reuses `audit-service`'s existing `alert_subscriptions` table directly (role IN `tenant_admin`/`compliance_officer`) rather than a second role table. `GET /notifications` additionally checks the resolved caller's own id matches the requested `recipientId` unless they hold an admin role. Verified end-to-end with real tokens (admin@example.com and dr.sharma@stjones.example, who is seeded but deliberately not in `alert_subscriptions`): every gated endpoint correctly 401s with no token, 403s for Dr. Sharma, and 200s for admin. **Still open, stated in both services' READMEs and §16:** role source of truth is still the hand-seeded table, not real Keycloak RBAC; token validation is a live per-request call to Medplum, not local JWT verification. This hardening also broke `apps/web`'s notification bell (it polled `GET /notifications` with no Authorization header) — caught by an independent reviewer and tester before merge, fixed the same day by threading `useMedplum().getAccessToken()` through `auditApi.ts`'s request helper; re-verified live with a real token (401 with none, 200 with one). |
+| 2026-10-18 | **Consent approval round trip built** (`services/consent-service`, closes the §16 gap this round): `POST /consents` takes an optional `requiresApproval` flag; when true the record lands as `status='pending'` instead of `granted`, and only `POST /consents/:id/approve` or `.../deny` (patient-initiated) can move it out of that state | The one documented exception to the ledger's append-only design (schema.ts's header): a `pending` row is UPDATEd in place on approve/deny rather than inserted as a new row, because a pending request was never an effective grant — there's no history being overwritten. Denial reuses `status='revoked'` with a `statusNote` ("Denied by patient (never approved)") rather than adding a fifth enum value, distinguished from a real post-grant revoke by that note and by `validityStart` never having been set to an approval time. `apps/web`'s `MyConsents`/`ConsentHistoryList` show a "Pending approval" bucket with Approve/Deny actions (patient view only) alongside Active/Revoked/Expired. **Known gap, not hidden:** neither endpoint checks that the caller is actually the patient the pending request is for — anyone who knows a consent id can approve or deny it; real RBAC/ownership enforcement is still open (§16, same theme as the RBAC hardening above). |
+| 2026-10-18 | **Appointment scheduling built** using FHIR's native `Appointment` resource directly via `@medplum/core`, no new backend service | Reuses Medplum rather than building a bespoke scheduling table — `status: 'booked'`/`'cancelled'` only, cancellation is non-destructive (status flip, never a delete). `apps/web` clinician view (`Scheduling.tsx`): patient + practitioner select, date/time/duration, free-text reason, upcoming-appointments table with Cancel. Patient view (`MyAppointments.tsx`): read-only list of their own upcoming appointments. Closes part of the §16 "Fully EHR/EMR" gap (scheduling specifically) — bed/ward management and full order workflows beyond notes/eRx remain unbuilt. **Known gap, not hidden:** no double-booking detection — two appointments for the same practitioner at overlapping times are both accepted silently. |
 
 This table grows each session the plan is revisited — see §16 for decisions still open.
 
@@ -452,12 +454,17 @@ built.
   adopted, even unmodified.
 - **Pre-approved AI providers** — which frontier vendors get a standing
   BAA/DPA template vs. case-by-case review per hospital.
-- **Consent approval round trip** — the MVP's consent actions (§05) write a
-  grant immediately; a real ABDM flow needs the request to go to the
-  patient's own consent-manager app and wait for approval (§04.2) before
-  any grant is recorded. Needs a design pass: does HInS build a reference
-  PHR/consent-manager app, or only implement the HIP/HIU side and integrate
-  with an existing one?
+- **Consent approval round trip (2026-10-18 — built, not fully closed):**
+  a clinician-initiated request can now be created with
+  `requiresApproval=true`, lands as `status='pending'`, and only moves to
+  `granted`/`revoked` (denied) via the patient's own approve/deny action
+  (Decisions log above). **Still open:** this models the mechanics of the
+  round trip, not real ABDM HIP/HIU integration — there's no actual
+  consent-manager app involved, and neither endpoint checks that the
+  caller is the patient the request is for (anyone with the consent id
+  can approve/deny it). Still needs the bigger design pass: does HInS
+  build a reference PHR/consent-manager app, or only implement the
+  HIP/HIU side and integrate with an existing one?
 - **deid-service/audit-service RBAC hardening (2026-10-18 update —
   partially closed, not fully):** `deid-service`'s `GET /audit`, and
   `audit-service`'s `GET`/`POST /subscriptions` and `GET /notifications`,
@@ -481,13 +488,15 @@ built.
   `client_credentials` service identity (`services/deid-service/src/medplumClient.ts`'s
   header has the detail) — same underlying gap as the rest of this
   list's "real service accounts, not shared human logins" theme, and
-  separate from the caller-authentication work above.
-- **"Fully EHR/EMR"** — explicitly not attempted in this round, said
-  plainly rather than implied done: scheduling, bed/ward management, and
-  full order workflows (beyond notes/eRx) are still unbuilt Phase 01
-  items (§13). What this round added was depth on what already existed —
-  edit/version history and voice dictation on the clinical documentation
-  flow — not new breadth.
+  separate from the caller-authentication work above. The frontend
+  regression this hardening caused (`apps/web`'s notification bell
+  401ing because `auditApi.ts` sent no Authorization header) was caught
+  before merge and fixed same-day (Decisions log above) — not a
+  remaining item.
+- **"Fully EHR/EMR"** — scheduling is now built (Decisions log above,
+  FHIR `Appointment` via `@medplum/core`, no double-booking detection
+  yet). Bed/ward management and full order workflows beyond notes/eRx
+  are still unbuilt Phase 01 items (§13).
 - **Editable `MedicationRequest`** — notes got full edit + version
   history (§05, Decisions log above); prescriptions didn't. Same pattern
   would extend cleanly, just not wired up yet.

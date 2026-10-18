@@ -30,10 +30,14 @@ export interface NotificationItem {
   summary: string;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, accessToken?: string): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
     ...init,
-    headers: { 'content-type': 'application/json', ...init?.headers },
+    headers: {
+      'content-type': 'application/json',
+      ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
+      ...init?.headers,
+    },
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -46,8 +50,15 @@ export function recordEditEvent(input: RecordEditEventInput): Promise<{ eventId:
   return request('/events', { method: 'POST', body: JSON.stringify(input) });
 }
 
-export function listNotifications(recipientId: string, unreadOnly = false): Promise<NotificationItem[]> {
-  return request(`/notifications?recipientId=${encodeURIComponent(recipientId)}&unreadOnly=${unreadOnly}`);
+/**
+ * GET /notifications now requires Authorization: Bearer <Medplum access
+ * token> (audit-service's caller-identity check, see its README) — a
+ * non-admin caller may only read their own recipientId. accessToken comes
+ * from the signed-in Medplum session (useMedplum().getAccessToken() at the
+ * call site), not stored or managed here.
+ */
+export function listNotifications(recipientId: string, accessToken: string | undefined, unreadOnly = false): Promise<NotificationItem[]> {
+  return request(`/notifications?recipientId=${encodeURIComponent(recipientId)}&unreadOnly=${unreadOnly}`, undefined, accessToken);
 }
 
 export function markNotificationRead(id: string): Promise<void> {

@@ -13,14 +13,16 @@ import { listNotifications, markAllNotificationsRead, markNotificationRead, type
  * integration. A real deployment needs those channels too; this is the
  * in-app layer, not the whole alerting story.
  */
-export function NotificationBell({ practitionerId }: { practitionerId: string | undefined }) {
+export function NotificationBell({ practitionerId, accessToken }: { practitionerId: string | undefined; accessToken: string | undefined }) {
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [opened, setOpened] = useState(false);
 
   const reload = useCallback(() => {
     if (!practitionerId) return;
-    listNotifications(practitionerId).then(setItems);
-  }, [practitionerId]);
+    listNotifications(practitionerId, accessToken).then(setItems).catch((err) => {
+      console.error('Failed to load notifications:', err);
+    });
+  }, [practitionerId, accessToken]);
 
   useEffect(() => {
     reload();
