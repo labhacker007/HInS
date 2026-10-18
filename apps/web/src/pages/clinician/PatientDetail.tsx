@@ -18,10 +18,12 @@ import { notifications } from '@mantine/notifications';
 import type { Condition, DocumentReference, MedicationRequest, Observation, Patient } from '@medplum/fhirtypes';
 import { useMedplum, useMedplumProfile } from '@medplum/react';
 import { formatHumanName, formatPatientMrn } from '../../lib/fhirFormat.js';
-import { createConsent } from '../../lib/consentApi.js';
+import { createConsent, listConsentHistory, type ConsentApiRecord } from '../../lib/consentApi.js';
 import { DiagnosesList, LabResultsList } from '../../components/ClinicalCoding.js';
 import { VersionedNote } from '../../components/VersionedNote.js';
+import { VersionedRx } from '../../components/VersionedRx.js';
 import { DictateButton } from '../../components/DictateButton.js';
+import { ConsentHistoryList } from '../../components/ConsentHistoryList.js';
 
 const ENCOUNTER_CLASS = {
   OPD: { system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode', code: 'AMB', display: 'ambulatory' },
@@ -91,7 +93,7 @@ export function PatientDetail() {
             ) : notes.length === 0 ? (
               <Text c="dimmed">No notes yet.</Text>
             ) : (
-              notes.map((n) => <VersionedNote key={n.id} note={n} onSaved={reload} />)
+              notes.map((n) => <VersionedNote key={n.id} note={n} patientId={id} onSaved={reload} />)
             )}
           </Stack>
         </Tabs.Panel>
@@ -113,14 +115,7 @@ export function PatientDetail() {
             ) : rx.length === 0 ? (
               <Text c="dimmed">No prescriptions yet.</Text>
             ) : (
-              rx.map((r) => (
-                <Paper key={r.id} withBorder p="sm">
-                  <Text fw={600}>{r.medicationCodeableConcept?.text}</Text>
-                  <Text size="sm" c="dimmed">
-                    {r.dosageInstruction?.[0]?.text} · {r.authoredOn?.slice(0, 10)}
-                  </Text>
-                </Paper>
-              ))
+              rx.map((r) => <VersionedRx key={r.id} rx={r} patientId={id} onSaved={reload} />)
             )}
           </Stack>
         </Tabs.Panel>
@@ -287,6 +282,13 @@ function RequestConsentPanel({
   requesterName: string;
 }) {
   const [sending, setSending] = useState(false);
+  const [history, setHistory] = useState<ConsentApiRecord[] | undefined>();
+
+  const reload = useCallback(() => {
+    listConsentHistory(patientId).then(setHistory);
+  }, [patientId]);
+
+  useEffect(reload, [reload]);
 
   async function handleRequest() {
     if (!requesterId) return;
@@ -305,6 +307,7 @@ function RequestConsentPanel({
         validityExpiry: expiry.toISOString(),
       });
       notifications.show({ message: 'Consent recorded for this patient', color: 'green' });
+      reload();
     } catch (err) {
       notifications.show({ message: String(err), color: 'red' });
     } finally {
@@ -313,17 +316,27 @@ function RequestConsentPanel({
   }
 
   return (
-    <Stack maw={480}>
-      <Text size="sm" c="dimmed">
-        Blueprint §04.2: in production, this would route through the patient's own
-        consent-manager app for approval, not write the grant directly — that
-        approval round trip isn't built yet (§16 open decisions). This button
-        records a 30-day treatment-purpose consent grant directly, so the
-        patient can see and revoke it from their own portal.
-      </Text>
-      <Button onClick={handleRequest} loading={sending} disabled={!requesterId}>
-        Record 30-day data-sharing consent
-      </Button>
+    <Stack maw={560}>
+      <div>
+        <Text size="sm" c="dimmed" mb="xs">
+          Blueprint §04.2: in production, this would route through the patient's own
+          consent-manager app for approval, not write the grant directly — that
+          approval round trip isn't built yet (§16 open decisions). This button
+          records a 30-day treatment-purpose consent grant directly, so the
+          patient can see and revoke it from their own portal.
+        </Text>
+        <Button onClick={handleRequest} loading={sending} disabled={!requesterId}>
+          Record 30-day data-sharing consent
+        </Button>
+      </div>
+
+      <Divider my="xs" />
+
+      {history === undefined ? (
+        <Loader size="sm" />
+      ) : (
+        <ConsentHistoryList history={history} />
+      )}
     </Stack>
   );
 }

@@ -1,22 +1,10 @@
 import { useEffect, useState, useCallback } from 'react';
-import {
-  Stack,
-  Title,
-  Text,
-  Paper,
-  Group,
-  Badge,
-  Button,
-  Loader,
-  Divider,
-  TextInput,
-  MultiSelect,
-  Select,
-} from '@mantine/core';
+import { Stack, Title, Text, Button, Loader, Divider, TextInput, MultiSelect, Select, Group } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import type { ConsentPurpose, ConsentType } from '@hins/shared';
 import { useMedplumProfile } from '@medplum/react';
-import { createConsent, listActiveConsents, revokeConsent, type ConsentApiRecord } from '../../lib/consentApi.js';
+import { createConsent, listConsentHistory, revokeConsent, type ConsentApiRecord } from '../../lib/consentApi.js';
+import { ConsentHistoryList } from '../../components/ConsentHistoryList.js';
 
 const SCOPE_OPTIONS = ['OPDRecord', 'LabReport', 'Prescription', 'DischargeSummary', 'Imaging'];
 const PURPOSE_OPTIONS: ConsentPurpose[] = ['self_use', 'treatment', 'payment', 'research'];
@@ -36,7 +24,7 @@ export function MyConsents() {
 
   const reload = useCallback(() => {
     if (!profile?.id) return;
-    listActiveConsents(profile.id).then(setConsents);
+    listConsentHistory(profile.id).then(setConsents);
   }, [profile?.id]);
 
   useEffect(reload, [reload]);
@@ -58,48 +46,14 @@ export function MyConsents() {
     <Stack maw={640}>
       <Title order={3}>My Consents</Title>
       <Text size="sm" c="dimmed">
-        Who has access to your records, and for how long. Revoke anything at any time.
+        Who has access to your records, and for how long — including past consents
+        you've revoked or that have expired.
       </Text>
 
       {consents === undefined ? (
         <Loader size="sm" />
-      ) : consents.length === 0 ? (
-        <Text c="dimmed">No active consent grants.</Text>
       ) : (
-        <Stack gap="sm">
-          {consents.map((c) => (
-            <Paper key={c.consentId} withBorder p="sm">
-              <Group justify="space-between" align="flex-start">
-                <div>
-                  <Group gap="xs" mb={4}>
-                    <Text fw={600}>{c.requesterDisplayName}</Text>
-                    <Badge size="sm" variant="light">
-                      {c.type}
-                    </Badge>
-                    <Badge size="sm" variant="outline">
-                      {c.purposeCode}
-                    </Badge>
-                  </Group>
-                  <Text size="sm" c="dimmed">
-                    Scope: {c.scope.join(', ')}
-                  </Text>
-                  <Text size="xs" c="dimmed">
-                    Expires {new Date(c.validityExpiry).toLocaleDateString()}
-                  </Text>
-                </div>
-                <Button
-                  size="xs"
-                  color="red"
-                  variant="light"
-                  loading={revokingId === c.consentId}
-                  onClick={() => handleRevoke(c.consentId)}
-                >
-                  Revoke
-                </Button>
-              </Group>
-            </Paper>
-          ))}
-        </Stack>
+        <ConsentHistoryList history={consents} onRevoke={handleRevoke} revokingId={revokingId} />
       )}
 
       <Divider my="sm" />

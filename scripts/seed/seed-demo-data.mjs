@@ -44,6 +44,7 @@ import { randomBytes, createHash, randomUUID } from 'node:crypto';
 
 const MEDPLUM_BASE_URL = process.env.MEDPLUM_BASE_URL ?? 'http://localhost:8103';
 const CONSENT_SERVICE_URL = process.env.CONSENT_SERVICE_URL ?? 'http://localhost:4001';
+const AUDIT_SERVICE_URL = process.env.AUDIT_SERVICE_URL ?? 'http://localhost:4005';
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? 'admin@example.com';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? 'medplum_admin';
 const MRN_SYSTEM = 'https://hins.example/identifiers/mrn';
@@ -205,6 +206,33 @@ async function main() {
   await F.update('Practitioner', sharmaId, { ...sharmaResource, qualification: [{ code: { text: 'MD, Cardiology' } }] });
   console.log(`  Practitioner/${sharmaId} (dr.sharma@stjones.example / DrSharma123!)`);
 
+  console.log('Inviting Alex Fernandes (Compliance & Security Officer)...');
+  const fernandesInvite = await fetchJson(`${MEDPLUM_BASE_URL}/admin/projects/${projectId}/invite`, {
+    method: 'POST',
+    token: adminToken.access_token,
+    body: {
+      resourceType: 'Practitioner',
+      firstName: 'Alex',
+      lastName: 'Fernandes',
+      email: 'security@stjones.example',
+      password: 'SecurityTest123!',
+      sendEmail: false,
+    },
+  });
+  const fernandesId = fernandesInvite.profile.reference.split('/')[1];
+  console.log(`  Practitioner/${fernandesId} (security@stjones.example / SecurityTest123!)`);
+
+  // Role-based alert subscriptions (blueprint §09/§10 -- a placeholder for
+  // real role-derived alerting, see services/audit-service's README): both
+  // get notified in-app whenever anyone edits a note or prescription.
+  console.log('Registering alert subscriptions...');
+  for (const sub of [
+    { practitionerId: adminPractitionerId, practitionerName: 'Medplum Admin', role: 'tenant_admin' },
+    { practitionerId: fernandesId, practitionerName: 'Alex Fernandes', role: 'compliance_officer' },
+  ]) {
+    await fetchJson(`${AUDIT_SERVICE_URL}/subscriptions`, { method: 'POST', body: sub });
+  }
+
   // --- Enrich the existing patient test-login account (created during the
   // MVP-verification session, docs/PLATFORM_BLUEPRINT.md Decisions log
   // 2026-10-15) so "My Records" / "My Consents" aren't empty on first
@@ -303,7 +331,7 @@ async function main() {
     });
   }
 
-  async function addRx(patient, { medication, dosage, practitionerId, daysAgo = 0 }) {
+  async function addRx(patient, { medication, dosage, practitionerId, practitionerName, daysAgo = 0 }) {
     // Text-primary on purpose -- see file header: no drug terminology
     // (RxNorm / India Drug Extension) integrated yet, and a fabricated
     // code would be worse than none.
@@ -313,6 +341,15 @@ async function main() {
       intent: 'order',
       subject: { reference: `Patient/${patient.id}` },
       requester: { reference: `Practitioner/${practitionerId}` },
+      // last-modified-by extension, not meta.author -- same reason as
+      // notes' author field: Medplum silently strips a client-supplied
+      // meta.author. See apps/web's VersionedRx.tsx header.
+      extension: [
+        {
+          url: 'https://hins.example/fhir/StructureDefinition/last-modified-by',
+          valueReference: { reference: `Practitioner/${practitionerId}`, display: practitionerName },
+        },
+      ],
       medicationCodeableConcept: { text: medication },
       dosageInstruction: [{ text: dosage }],
       authoredOn: new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString(),
@@ -391,7 +428,7 @@ async function main() {
   await addRx(suresh, { medication: 'Sevelamer 800mg', dosage: '1 tablet with meals', practitionerId: adminPractitionerId, practitionerName: 'Medplum Admin', daysAgo: 2 });
 
   console.log('\nDone. Summary:');
-  console.log(`  Practitioners: Medplum Admin (admin@example.com), Dr. Priya Sharma (dr.sharma@stjones.example / DrSharma123!)`);
+  console.log(`  Practitioners: Medplum Admin (admin@example.com), Dr. Priya Sharma (dr.sharma@stjones.example / DrSharma123!), Alex Fernandes — Compliance & Security (security@stjones.example / SecurityTest123!)`);
   console.log(`  Patients seeded/enriched: ${ashaLogin ? 1 : 0} existing + ${patients.length - (ashaLogin ? 1 : 0)} new = ${patients.length} total`);
   patients.forEach((p) => console.log(`    - ${p.name[0].given[0]} ${p.name[0].family} (${p.department}) — treatment consent on file`));
   console.log('\nCoded per: SNOMED CT + ICD-10 (Condition), LOINC (DocumentReference.type, Observation.code), UCUM (lab units).');

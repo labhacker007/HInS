@@ -120,6 +120,29 @@ app.get(
   }
 );
 
+app.get(
+  '/consents/history',
+  {
+    schema: {
+      querystring: ListConsentsQuerySchema,
+      response: { 200: z.array(ConsentRecordResponseSchema) },
+    },
+  },
+  async (req) => {
+    // Every consent record for this patient, unfiltered — the full
+    // append-only history (active grants, revoked grants, and the
+    // original grants revoke rows supersede). Used by the "show revoked
+    // consents too" views in apps/web (both clinician and patient) — the
+    // active-only GET /consents stays as-is for places that only care
+    // about current access.
+    return db
+      .select()
+      .from(consentRecords)
+      .where(eq(consentRecords.grantorPatientId, req.query.patientId))
+      .orderBy(desc(consentRecords.createdAt));
+  }
+);
+
 app.post(
   '/consents/:id/revoke',
   {

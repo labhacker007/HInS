@@ -18,6 +18,7 @@
     "dev:consent-service": "npm run dev -w services/consent-service",
     "dev:terminology-service": "npm run dev -w services/terminology-service",
     "dev:deid-service": "npm run dev -w services/deid-service",
+    "dev:audit-service": "npm run dev -w services/audit-service",
     "seed:demo": "node scripts/seed/seed-demo-data.mjs"
   }
 }

@@ -3,6 +3,7 @@ import { Paper, Group, Text, Badge, Textarea, Button, Stack, Collapse, Divider, 
 import { notifications } from '@mantine/notifications';
 import type { Bundle, DocumentReference } from '@medplum/fhirtypes';
 import { useMedplum } from '@medplum/react';
+import { recordEditEvent } from '../lib/auditApi.js';
 
 /**
  * A clinical note with inline edit and full version history — clinician
@@ -23,9 +24,11 @@ import { useMedplum } from '@medplum/react';
  */
 export function VersionedNote({
   note,
+  patientId,
   onSaved,
 }: {
   note: DocumentReference;
+  patientId: string;
   onSaved: () => void;
 }) {
   const medplum = useMedplum();
@@ -48,15 +51,33 @@ export function VersionedNote({
     setSaving(true);
     try {
       const profile = medplum.getProfile();
+      const editorId = profile ? `${profile.resourceType}/${profile.id}` : undefined;
+      const editorName = profile ? profileName(profile) : undefined;
+      const previousAuthor = note.author?.[0];
       const updated: DocumentReference = {
         ...note,
-        author: profile ? [{ reference: `${profile.resourceType}/${profile.id}`, display: profileName(profile) }] : note.author,
+        author: editorId && editorName ? [{ reference: editorId, display: editorName }] : note.author,
         content: [{ attachment: { contentType: 'text/plain', data: btoa(draft) } }],
       };
       await medplum.updateResource(updated);
       notifications.show({ message: 'Note updated', color: 'green' });
       setEditing(false);
       onSaved();
+      if (profile?.id && editorName) {
+        recordEditEvent({
+          resourceType: 'DocumentReference',
+          resourceId: note.id,
+          patientId,
+          action: 'update',
+          actorId: profile.id,
+          actorName: editorName,
+          summary: `Corrected a ${note.type?.text ?? 'clinical'} note`,
+          originalAuthorId: previousAuthor?.reference?.split('/')[1],
+          originalAuthorName: previousAuthor?.display,
+        }).catch(() => {
+          /* alerting is best-effort — a failed notification must never block the save itself */
+        });
+      }
     } catch (err) {
       notifications.show({ message: String(err), color: 'red' });
     } finally {

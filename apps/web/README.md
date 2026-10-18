@@ -12,17 +12,23 @@ your profile in the HInS Dev project — not a separate flag.
 - Patient list with name search, and registration of new patients
 - Patient detail: encounter notes (OPD/clinic or inpatient setting, per
   blueprint §08.2), **diagnoses** and **labs** (read-only, coded —
-  see below), prescriptions (`MedicationRequest`), and a "record consent"
-  action
-- Notes are **editable with full version history** — see
-  `src/components/VersionedNote.tsx`. Every edit records who made it and
-  when, visible to any clinician viewing the note; see "Edit history &
-  attribution" below for how that's actually implemented (it isn't
-  Medplum's `meta.author` — that field doesn't auto-populate and is
-  silently stripped if you try to set it yourself).
+  see below), prescriptions (`MedicationRequest`), and a consent panel
+  (below)
+- **Both notes and prescriptions are editable with full version
+  history** — `src/components/VersionedNote.tsx` and `VersionedRx.tsx`.
+  Every edit records who made it and when, visible to any clinician
+  viewing the record; see "Edit history & attribution" below for how
+  that's actually implemented (it isn't Medplum's `meta.author` — that
+  field doesn't auto-populate and is silently stripped if you try to set
+  it yourself).
+- **Edits trigger role-based in-app alerts** — `src/components/NotificationBell.tsx`,
+  backed by `services/audit-service`. See "Alerting on edits" below.
 - **Voice dictation** (`src/components/DictateButton.tsx`) on the note
   form — dictate instead of typing, including while correcting a note.
   **Dev/demo only**, labeled as such in the UI: see "Voice-to-text" below.
+- Consent panel shows the patient's **full consent history** — active,
+  revoked, and expired, not just active grants — alongside the "record
+  consent" action.
 
 ## Edit history & attribution
 
@@ -33,19 +39,35 @@ server-controlled). What Medplum *does* track correctly, confirmed the
 same way: full version history (`GET .../_history`) with a correct
 `meta.versionId`/`meta.lastUpdated` per version.
 
-So attribution lives in `DocumentReference.author` — a normal, non-`meta`
-FHIR field that persists like any other data and is preserved per-version
-in history. Every create and every edit sets it to the signed-in
-practitioner. "Last edited by X · <time>" on a note, and the full history
-list, both read from this field — not from anything Medplum infers on its
-own.
+So attribution lives in a normal, non-`meta` field that persists like any
+other data and is preserved per-version in history — not from anything
+Medplum infers on its own:
+- `DocumentReference.author` for notes — an actual standard FHIR field.
+- For `MedicationRequest`, there's no equivalently-shaped standard field
+  (`requester` means "who ordered this," a different fact from "who last
+  corrected a typo in it" — conflating them would lose the original
+  prescriber of record). Uses a custom extension instead,
+  `https://hins.example/fhir/StructureDefinition/last-modified-by` —
+  verified directly, the same way, that a custom extension isn't
+  server-stripped the way `meta.author` is.
 
-Scoping, stated plainly: edit + history is built for `DocumentReference`
-(notes), not yet for `MedicationRequest` (prescriptions) — the same
-pattern would extend cleanly, it just isn't wired up. History is shown
-to clinicians only, not surfaced in the patient portal — a UX choice
-(audit trails are normally clinician/admin-facing), not a technical
-limit.
+History is shown to clinicians only, not surfaced in the patient portal —
+a UX choice (audit trails are normally clinician/admin-facing), not a
+technical limit.
+
+## Alerting on edits
+
+Every save in `VersionedNote`/`VersionedRx` calls
+`services/audit-service`'s `POST /events`, which fans out in-app
+notifications to two kinds of recipient (full detail in that service's
+README):
+1. **Role subscribers** — admin/compliance-equivalent roles, seeded by
+   `scripts/seed/`.
+2. **The original author**, if someone else made the edit.
+
+The bell in the clinician header polls for unread alerts every 20
+seconds. **In-app only** — no email/SMS/pager integration, a real gap
+for actual clinical alerting, not something to mistake for finished.
 
 ## Voice-to-text
 
@@ -113,8 +135,10 @@ npm run seed:demo    # from the repo root — see scripts/seed/README.md
 ```
 
 Populates a roster of patients across departments, a second clinician
-login, and coded diagnoses/labs for several of them, so neither app opens
-empty. Run it once after `infra:up`.
+login, a compliance/security officer login, role-based alert
+subscriptions, and coded diagnoses/labs for several patients, so neither
+app opens empty. Run it once after `infra:up` (needs `consent-service`
+and `audit-service` running too — see the repo root README).
 
 ### Test accounts (local dev project only)
 
@@ -122,6 +146,7 @@ empty. Run it once after `infra:up`.
 |---|---|---|
 | Clinician (seeded by Medplum itself) | `admin@example.com` | `medplum_admin` |
 | Clinician — Dr. Priya Sharma, Cardiology (`seed:demo`) | `dr.sharma@stjones.example` | `DrSharma123!` |
+| Compliance & Security — Alex Fernandes (`seed:demo`) | `security@stjones.example` | `SecurityTest123!` |
 | Patient — Asha Verma (`seed:demo` enriches this account) | `asha.verma.patient@example.com` | `PatientTest123!` |
 
 All plaintext dev-only credentials for the local `HInS Dev` Medplum

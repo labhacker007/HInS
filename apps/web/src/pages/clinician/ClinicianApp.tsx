@@ -5,6 +5,7 @@ import { PatientList } from './PatientList.js';
 import { NewPatient } from './NewPatient.js';
 import { PatientDetail } from './PatientDetail.js';
 import { CatchAll } from '../../App.js';
+import { NotificationBell } from '../../components/NotificationBell.js';
 
 export function ClinicianApp() {
   const medplum = useMedplum();
@@ -26,15 +27,18 @@ export function ClinicianApp() {
                 `Dr. ${profile.name?.[0]?.given?.[0] ?? ''} ${profile.name?.[0]?.family ?? ''}`.trim()}
             </Text>
           </Group>
-          <Button
-            variant="subtle"
-            size="sm"
-            onClick={() => {
-              medplum.signOut().then(() => navigate('/'));
-            }}
-          >
-            Sign out
-          </Button>
+          <Group gap="sm">
+            <NotificationBell practitionerId={profile?.id} />
+            <Button
+              variant="subtle"
+              size="sm"
+              onClick={() => {
+                medplum.signOut().then(() => navigate('/'));
+              }}
+            >
+              Sign out
+            </Button>
+          </Group>
         </Group>
       </AppShell.Header>
       <AppShell.Main>

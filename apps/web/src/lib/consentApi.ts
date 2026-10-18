@@ -61,6 +61,14 @@ export function listActiveConsents(patientId: string): Promise<ConsentApiRecord[
   return request(`/consents?patientId=${encodeURIComponent(patientId)}`);
 }
 
+/** Every consent record for this patient — active, revoked, and
+ * superseded-by-a-revoke grants all included, newest first. Used
+ * anywhere both roles need to see revoked consents, not just active
+ * ones. */
+export function listConsentHistory(patientId: string): Promise<ConsentApiRecord[]> {
+  return request(`/consents/history?patientId=${encodeURIComponent(patientId)}`);
+}
+
 export function createConsent(input: CreateConsentInput): Promise<ConsentApiRecord> {
   return request('/consents', {
     method: 'POST',
