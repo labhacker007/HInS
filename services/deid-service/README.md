@@ -39,14 +39,37 @@ describes, correctly, and verified against real seeded data. It does
   re-identify, not a fixed checklist — `safe_harbor`'s HIPAA-defined
   method is a reasonable technical basis for that but isn't itself a GDPR
   legal determination.
-- The `disclosure_audit_log` and `pseudonym_mapping` tables are
-  unauthenticated in this dev build (`GET /audit` has no access control).
-  Both tables hold real patient IDs and are themselves sensitive — a real
-  deployment restricts them to the `compliance_officer` role (blueprint
-  §10.1) before this goes anywhere near real data.
-- Medplum access for this service reuses the admin dev login, not a
-  proper `client_credentials` service identity — see `src/medplumClient.ts`'s
-  header for why, and §16 of the blueprint for the open item.
+- **`GET /audit` is now access-controlled, closing the gap this README
+  used to state plainly (2026-10-15 → 2026-10-18 update):** the caller
+  must send a real `Authorization: Bearer <token>` for an authenticated
+  Medplum user on this project (verified live against Medplum's own
+  `GET /auth/me` — not a locally-decoded JWT, see `src/index.ts`'s
+  `resolveCaller` header comment for why a naive "forward the token to
+  `GET /fhir/R4/Practitioner/{claimedId}`" check was tried first and
+  found spoofable on this instance), AND that caller must have an active
+  `alert_subscriptions` row (audit-service's table, reused directly —
+  see that service's README) with role `tenant_admin` or
+  `compliance_officer`. No token → 401; wrong role → 403 naming the
+  roles required. Both tables still hold real patient IDs and are still
+  sensitive; this closes the *access-control* gap, not the data-
+  sensitivity design, which is unchanged.
+- **What's still NOT real RBAC, said plainly rather than implied fixed:**
+  the role source of truth is still the hand-seeded `alert_subscriptions`
+  table (audit-service's), not a Keycloak-integrated role system —
+  anyone with direct Postgres access or a compromised admin session can
+  still grant themselves/anyone an admin role by inserting a row. Token
+  validation happens via a live call to Medplum's `/auth/me` on *every*
+  request rather than local JWT/JWKS verification — correct today, but
+  slower than it needs to be; a legitimate follow-up, not hidden. Full
+  Keycloak/RBAC integration is still the bigger open item (blueprint
+  §16).
+- Medplum access for this service's own calls to Medplum (export/
+  reidentify) reuses the admin dev login, not a proper
+  `client_credentials` service identity — see `src/medplumClient.ts`'s
+  header for why, and §16 of the blueprint for the open item. (This is
+  separate from the caller-authentication work above: that's about who's
+  allowed to call *this* service's endpoints; this is about how *this
+  service* authenticates to Medplum to do its own work.)
 
 ## API
 
@@ -61,6 +84,10 @@ POST /reidentify
   -> { realPatientId }                      (404 if not a pseudonymized-method pseudonym)
 
 GET /audit?limit=50
+  Requires Authorization: Bearer <Medplum access token> for a caller
+  whose Practitioner has an active alert_subscriptions role of
+  tenant_admin or compliance_officer. 401 (no/invalid token) or
+  403 (valid token, wrong role) otherwise.
   -> disclosure_audit_log rows, newest first
 ```
 
@@ -79,4 +106,11 @@ curl -X POST localhost:4003/export -H 'content-type: application/json' -d '{
   "requesterDisplayName": "Dr. Researcher"
 }'
 # -> "skipped", with the no-consent reason stated
+
+# GET /audit needs a real Medplum bearer token for an admin/compliance
+# practitioner — get one the same way apps/web's login does (password +
+# PKCE device flow against :8103), e.g. admin@example.com / medplum_admin:
+curl localhost:4003/audit -H "Authorization: Bearer <token>"
+# -> 401 with no token; 403 if the token's practitioner has no
+#    alert_subscriptions row with role tenant_admin/compliance_officer.
 ```

@@ -36,10 +36,44 @@ assignment, seeded by hand. A real deployment needs this driven by the
 same role source of truth as access control itself, not a separate list
 that can drift from it.
 
-**`GET /audit`-equivalent access is unauthenticated in this dev build** —
-`GET /subscriptions` and `POST /subscriptions` have no access control.
-Same gap as `deid-service`'s `GET /audit`: needs restricting to
-`compliance_officer`/`tenant_admin` before this goes near real data.
+**`GET`/`POST /subscriptions` and `GET /notifications` are now access-
+controlled, closing the gap this README used to state plainly
+(2026-10-15 → 2026-10-18 update):**
+
+- `GET`/`POST /subscriptions` require `Authorization: Bearer <token>`
+  for a real Medplum caller on this project — resolved via Medplum's own
+  `GET /auth/me` (not a locally-decoded JWT; see `src/index.ts`'s
+  `resolveCaller` header comment for what was actually tried and ruled
+  out against the live instance first, including why a naive "forward
+  the token to `GET /fhir/R4/Practitioner/{claimedId}`" check turned out
+  to be spoofable on this instance's default access policy) — AND that
+  caller must have an active `alert_subscriptions` row with role
+  `tenant_admin` or `compliance_officer`. No token → 401; valid token,
+  wrong role → 403 naming the roles required.
+- `GET /notifications?recipientId=X` now additionally confirms the
+  resolved caller's own practitioner id matches `recipientId` — a
+  non-admin caller can only read their OWN notifications now, not
+  anyone else's by putting a different id in the query string. A caller
+  with an active `tenant_admin`/`compliance_officer` subscription may
+  still read anyone's (e.g. for an admin dashboard). This was the exact
+  gap this README used to call out ("currently only scoped by the
+  recipientId query param with no proof the caller IS that recipient").
+
+**What's still NOT real RBAC, said plainly rather than implied fixed:**
+the role source of truth is still this same hand-seeded
+`alert_subscriptions` table — anyone with direct Postgres access, or a
+compromised admin session, can still grant an arbitrary practitioner an
+admin role by inserting a row; there's no Keycloak-integrated role
+system behind it yet (blueprint §16, still open). Token validation calls
+Medplum's `/auth/me` live on every request rather than verifying the
+JWT locally against Medplum's JWKS — correct today, but a network round
+trip per request where local verification would be faster; a legitimate
+follow-up, not hidden. `POST /notifications/:id/read` and
+`POST /notifications/read-all` are **not** gated by this change (out of
+this round's scope) — either lets any caller mark any notification id
+as read without proving ownership; a smaller but real residual gap,
+tracked here rather than silently left for a future session to
+rediscover.
 
 ## API
 
@@ -50,11 +84,18 @@ POST /events
   -> { eventId, notifiedCount }
 
 GET /notifications?recipientId=X&unreadOnly=false
+  Requires Authorization: Bearer <Medplum access token>. Non-admin
+  callers may only pass their OWN practitioner id as recipientId (401 no
+  token, 403 someone else's id without an admin role).
 POST /notifications/:id/read
 POST /notifications/read-all   { recipientId }
+  (not yet gated by caller identity — see "What's still NOT real RBAC"
+  above)
 
 POST /subscriptions   { practitionerId, practitionerName, role }
 GET  /subscriptions
+  Both require Authorization: Bearer <token> for a caller with an active
+  alert_subscriptions role of tenant_admin or compliance_officer.
 ```
 
 ## Try it
@@ -68,5 +109,10 @@ in as a subscribed role (`admin@example.com` / `medplum_admin`) and check
 the bell — or query directly:
 
 ```bash
-curl "localhost:4005/notifications?recipientId=<practitioner id>"
+curl "localhost:4005/notifications?recipientId=<practitioner id>" \
+  -H "Authorization: Bearer <that practitioner's own Medplum access token>"
 ```
+
+Getting a real token for a test: same password + PKCE device-flow login
+`apps/web` uses against `:8103` (`admin@example.com` / `medplum_admin`,
+or any seeded practitioner login from `scripts/seed/`).

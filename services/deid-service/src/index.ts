@@ -15,12 +15,12 @@
  *                         deployment restricts it to the
  *                         compliance_officer role (blueprint §10.1).
  */
-import Fastify from 'fastify';
+import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
 import { randomBytes } from 'node:crypto';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { db } from './db/client.js';
 import { disclosureAuditLog, pseudonymMapping } from './db/schema.js';
 import { DeidMethodSchema, ErrorResponseSchema, ExportRequestSchema, ReidentifyRequestSchema } from './schemas.js';
@@ -29,6 +29,79 @@ import { fhirGet } from './medplumClient.js';
 
 const PORT = Number(process.env.PORT ?? 4003);
 const CONSENT_SERVICE_URL = process.env.CONSENT_SERVICE_URL ?? 'http://localhost:4001';
+const MEDPLUM_BASE_URL = process.env.MEDPLUM_BASE_URL ?? 'http://localhost:8103';
+
+/**
+ * Caller authentication + admin-role check for GET /audit. Duplicated
+ * near-verbatim in services/audit-service/src/index.ts — see that copy's
+ * header comment for the full writeup of how this was researched against
+ * the live Medplum instance (why GET /oauth2/userinfo and a forwarded-
+ * token "does Practitioner/{claimedId} return 200" check were both ruled
+ * out, and why GET /auth/me is the one that actually can't be spoofed).
+ * Not factored into a shared package on purpose — these two services
+ * don't share one today (blueprint §16), matching how each already
+ * duplicates its own medplumClient-style login logic rather than
+ * sharing one module.
+ */
+const ADMIN_ROLES = ['tenant_admin', 'compliance_officer'] as const;
+
+interface AuthedCaller {
+  practitionerId: string;
+  practitionerName: string;
+}
+
+async function resolveCaller(authHeader: string | undefined): Promise<AuthedCaller | undefined> {
+  if (!authHeader?.startsWith('Bearer ')) return undefined;
+  let res: Response;
+  try {
+    res = await fetch(`${MEDPLUM_BASE_URL}/auth/me`, { headers: { authorization: authHeader } });
+  } catch {
+    return undefined;
+  }
+  if (!res.ok) return undefined;
+  const body: any = await res.json().catch(() => undefined);
+  const ref: string | undefined = body?.membership?.profile?.reference;
+  if (!ref?.startsWith('Practitioner/')) return undefined;
+  return { practitionerId: ref.slice('Practitioner/'.length), practitionerName: body?.membership?.profile?.display ?? ref };
+}
+
+/** `alert_subscriptions` is audit-service's own table, not one deid-
+ * service's db/schema.ts owns or migrates — but both services point at
+ * the same physical Postgres database (postgres://hins:hins@localhost:5433/hins,
+ * see infra docs), and it already models exactly "which practitioner has
+ * which role for alerting/admin purposes," so it's queried here directly
+ * by raw SQL rather than duplicated as a second, driftable role table.
+ * Deliberately NOT added as a Drizzle table object in this service's own
+ * schema.ts — that would misleadingly imply deid-service owns/migrates
+ * it. */
+async function activeRoleFor(practitionerId: string): Promise<string | undefined> {
+  const result = await db.execute<{ role: string }>(
+    sql`SELECT role FROM alert_subscriptions WHERE practitioner_id = ${practitionerId} AND active = true LIMIT 1`
+  );
+  return result.rows[0]?.role;
+}
+
+async function requireAdminCaller(req: FastifyRequest, reply: FastifyReply): Promise<AuthedCaller | undefined> {
+  const caller = await resolveCaller(req.headers.authorization);
+  if (!caller) {
+    reply.code(401);
+    reply.send({
+      error: 'unauthorized',
+      message: 'Provide Authorization: Bearer <token> with a valid Medplum access token for the HInS Dev project.',
+    });
+    return undefined;
+  }
+  const role = await activeRoleFor(caller.practitionerId);
+  if (!role || !(ADMIN_ROLES as readonly string[]).includes(role)) {
+    reply.code(403);
+    reply.send({
+      error: 'forbidden',
+      message: `This endpoint requires an active alert_subscriptions role of ${ADMIN_ROLES.join(' or ')}. Caller Practitioner/${caller.practitionerId} has ${role ?? 'no'} role.`,
+    });
+    return undefined;
+  }
+  return caller;
+}
 
 const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
 app.setValidatorCompiler(validatorCompiler);
@@ -183,10 +256,21 @@ app.get(
   {
     schema: {
       querystring: z.object({ limit: z.coerce.number().int().min(1).max(500).default(50) }),
-      response: { 200: z.array(z.record(z.string(), z.unknown())) },
+      response: {
+        200: z.array(z.record(z.string(), z.unknown())),
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+      },
     },
   },
-  async (req) => {
+  async (req, reply) => {
+    // Gated: this table holds real patient IDs on every disclosure (see
+    // db/schema.ts's header) and is itself sensitive — restricted to
+    // compliance_officer/tenant_admin (blueprint §10.1, §16). See
+    // requireAdminCaller's header comment for how the caller's identity
+    // is actually verified against the live Medplum instance.
+    const caller = await requireAdminCaller(req, reply);
+    if (!caller) return;
     return db.query.disclosureAuditLog.findMany({
       orderBy: (t, { desc }) => desc(t.createdAt),
       limit: req.query.limit,

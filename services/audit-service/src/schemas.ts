@@ -22,3 +22,10 @@ export const CreateSubscriptionSchema = z.object({
   practitionerName: z.string().min(1),
   role: z.string().min(1),
 });
+
+/** Shared shape for the 401/403 responses the caller-auth check returns
+ * on GET/POST /subscriptions and GET /notifications. */
+export const ErrorResponseSchema = z.object({
+  error: z.string(),
+  message: z.string(),
+});
