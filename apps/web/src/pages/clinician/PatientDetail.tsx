@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { useParams, Link } from 'react-router';
+import { useParams, useNavigate, Link } from 'react-router';
 import {
   Stack,
   Group,
@@ -32,6 +32,7 @@ const ENCOUNTER_CLASS = {
 
 export function PatientDetail() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const medplum = useMedplum();
   const profile = useMedplumProfile();
   const [patient, setPatient] = useState<Patient | undefined>();
@@ -65,9 +66,13 @@ export function PatientDetail() {
             MRN {formatPatientMrn(patient)} · DOB {patient.birthDate ?? '—'} · {patient.gender ?? '—'}
           </Text>
         </div>
-        <Button component={Link} to="/" variant="subtle">
-          ← All patients
-        </Button>
+        <Group gap="xs">
+          {/* Deep-links to Scheduling.tsx with the patient pre-selected via ?patientId= */}
+          <Button onClick={() => navigate(`/schedule?patientId=${id}`)}>Book appointment</Button>
+          <Button component={Link} to="/" variant="subtle">
+            ← All patients
+          </Button>
+        </Group>
       </Group>
 
       <Tabs defaultValue="notes">
