@@ -5,6 +5,7 @@ import { PatientList } from './PatientList.js';
 import { NewPatient } from './NewPatient.js';
 import { PatientDetail } from './PatientDetail.js';
 import { Scheduling } from './Scheduling.js';
+import { BedBoard } from './BedBoard.js';
 import { CatchAll } from '../../App.js';
 import { NotificationBell } from '../../components/NotificationBell.js';
 
@@ -41,6 +42,14 @@ export function ClinicianApp() {
               >
                 Schedule
               </Button>
+              <Button
+                component={Link}
+                to="/beds"
+                variant={location.pathname.startsWith('/beds') ? 'light' : 'subtle'}
+                size="sm"
+              >
+                Beds
+              </Button>
             </Group>
             <Text size="sm" c="dimmed">
               {profile?.resourceType === 'Practitioner' &&
@@ -67,6 +76,7 @@ export function ClinicianApp() {
           <Route path="/patients/new" element={<NewPatient />} />
           <Route path="/patients/:id" element={<PatientDetail />} />
           <Route path="/schedule" element={<Scheduling />} />
+          <Route path="/beds" element={<BedBoard />} />
           <Route path="*" element={<CatchAll to="/" />} />
         </Routes>
       </AppShell.Main>
