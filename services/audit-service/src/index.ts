@@ -16,16 +16,122 @@
  * integration. That's a real gap for actual clinical alerting, not a
  * design choice to treat as finished; see this service's README.
  */
-import Fastify from 'fastify';
+import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { and, desc, eq, ne } from 'drizzle-orm';
 import { db } from './db/client.js';
 import { editEvents, alertSubscriptions, notifications } from './db/schema.js';
-import { CreateSubscriptionSchema, RecordEventSchema } from './schemas.js';
+import { CreateSubscriptionSchema, ErrorResponseSchema, RecordEventSchema } from './schemas.js';
 
 const PORT = Number(process.env.PORT ?? 4005);
+const MEDPLUM_BASE_URL = process.env.MEDPLUM_BASE_URL ?? 'http://localhost:8103';
+
+/**
+ * Caller authentication + admin-role check for this service's admin-only
+ * endpoints (GET/POST /subscriptions, and the recipient check on
+ * GET /notifications). Duplicated near-verbatim in
+ * services/deid-service/src/index.ts — these two services don't share an
+ * npm package today (blueprint §16), and this is ~20 lines, same call as
+ * each service already duplicating its own medplumClient-style login
+ * logic rather than sharing one.
+ *
+ * HOW CALLER IDENTITY IS RESOLVED — researched against the actually-
+ * running Medplum instance before writing this, not guessed:
+ *
+ *   - `GET /oauth2/userinfo` (standard OIDC, Medplum supports it) only
+ *     returns `{"sub": "<User id>"}` — curl-verified. That's the User
+ *     resource id, not the Practitioner/profile id this service's role
+ *     table (`alert_subscriptions.practitionerId`) is keyed on, so it
+ *     can't drive the role check by itself.
+ *   - The approach floated when this task was scoped — forward the
+ *     caller's own token to `GET /fhir/R4/Practitioner/{claimedId}` and
+ *     check it returns 200 for the id the caller claims — was tried
+ *     directly against this instance and found INSECURE: this project's
+ *     default "Practitioner Access Policy" grants every authenticated
+ *     practitioner read access to every *other* Practitioner resource too
+ *     (an ordinary staff-directory policy, not patient data). Curl-
+ *     verified: Dr. Sharma's own real token successfully GETs
+ *     `Practitioner/<Medplum Admin's id>` (200, full record). A "claimed
+ *     id" is therefore not provable this way — any caller could claim any
+ *     id and the "it returned 200" check would wrongly pass.
+ *   - What actually works and is NOT spoofable: Medplum's own
+ *     `GET /auth/me`. It takes only the bearer token (no claimed id in
+ *     the request at all) and returns `membership.profile.reference`,
+ *     resolved server-side from that token's own login session. Curl-
+ *     verified: 401 with no/garbage token; 200 with
+ *     `Practitioner/65abe91c-...` for admin@example.com's real token and
+ *     `Practitioner/62f31908-...` for dr.sharma@stjones.example's real
+ *     token — i.e. each token resolves to its OWN owner, with no id
+ *     supplied by the caller for Medplum to simply echo back.
+ *
+ * Trade-off, stated honestly rather than hidden: this makes one live
+ * network call to Medplum per authenticated request. Medplum's access
+ * tokens are JWTs that could instead be verified locally against its
+ * JWKS (faster, no round trip) — that's a legitimate follow-up, not done
+ * here; see this service's README.
+ */
+const ADMIN_ROLES = ['tenant_admin', 'compliance_officer'] as const;
+
+interface AuthedCaller {
+  practitionerId: string;
+  practitionerName: string;
+}
+
+async function resolveCaller(authHeader: string | undefined): Promise<AuthedCaller | undefined> {
+  if (!authHeader?.startsWith('Bearer ')) return undefined;
+  let res: Response;
+  try {
+    res = await fetch(`${MEDPLUM_BASE_URL}/auth/me`, { headers: { authorization: authHeader } });
+  } catch {
+    return undefined;
+  }
+  if (!res.ok) return undefined;
+  const body: any = await res.json().catch(() => undefined);
+  const ref: string | undefined = body?.membership?.profile?.reference;
+  if (!ref?.startsWith('Practitioner/')) return undefined;
+  return { practitionerId: ref.slice('Practitioner/'.length), practitionerName: body?.membership?.profile?.display ?? ref };
+}
+
+/** This table is audit-service's own schema and already models exactly
+ * "which practitioner has which role for alerting/admin purposes" — see
+ * db/schema.ts's header. Reused directly rather than inventing a second
+ * role table that could drift from it. */
+async function activeRoleFor(practitionerId: string): Promise<string | undefined> {
+  const [row] = await db
+    .select({ role: alertSubscriptions.role })
+    .from(alertSubscriptions)
+    .where(and(eq(alertSubscriptions.practitionerId, practitionerId), eq(alertSubscriptions.active, true)));
+  return row?.role;
+}
+
+/** preHandler-shaped guard for the two admin-only /subscriptions routes.
+ * 401s if the bearer token doesn't resolve to a real Medplum caller on
+ * this project; 403s if it resolves but isn't tenant_admin/
+ * compliance_officer. Returns the caller on success (undefined means a
+ * response was already sent — the route handler must return immediately). */
+async function requireAdminCaller(req: FastifyRequest, reply: FastifyReply): Promise<AuthedCaller | undefined> {
+  const caller = await resolveCaller(req.headers.authorization);
+  if (!caller) {
+    reply.code(401);
+    reply.send({
+      error: 'unauthorized',
+      message: 'Provide Authorization: Bearer <token> with a valid Medplum access token for the HInS Dev project.',
+    });
+    return undefined;
+  }
+  const role = await activeRoleFor(caller.practitionerId);
+  if (!role || !(ADMIN_ROLES as readonly string[]).includes(role)) {
+    reply.code(403);
+    reply.send({
+      error: 'forbidden',
+      message: `This endpoint requires an active alert_subscriptions role of ${ADMIN_ROLES.join(' or ')}. Caller Practitioner/${caller.practitionerId} has ${role ?? 'no'} role.`,
+    });
+    return undefined;
+  }
+  return caller;
+}
 
 const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
 app.setValidatorCompiler(validatorCompiler);
@@ -109,10 +215,38 @@ app.get(
             summary: z.string(),
           })
         ),
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
       },
     },
   },
-  async (req) => {
+  async (req, reply) => {
+    // Authenticated callers may always read their OWN notifications (the
+    // recipientId they claim must equal their own resolved practitioner
+    // id); only tenant_admin/compliance_officer may request someone
+    // else's recipientId — see this service's README for why a bare
+    // "has a token" check isn't enough here: without this, any caller
+    // could read any OTHER practitioner's notifications just by putting
+    // a different id in the query string.
+    const caller = await resolveCaller(req.headers.authorization);
+    if (!caller) {
+      reply.code(401);
+      return reply.send({
+        error: 'unauthorized',
+        message: 'Provide Authorization: Bearer <token> with a valid Medplum access token for the HInS Dev project.',
+      });
+    }
+    if (caller.practitionerId !== req.query.recipientId) {
+      const role = await activeRoleFor(caller.practitionerId);
+      if (!role || !(ADMIN_ROLES as readonly string[]).includes(role)) {
+        reply.code(403);
+        return reply.send({
+          error: 'forbidden',
+          message: `You may only read your own notifications (recipientId must equal your own practitioner id, Practitioner/${caller.practitionerId}), or hold an active alert_subscriptions role of ${ADMIN_ROLES.join(' or ')} to read anyone's.`,
+        });
+      }
+    }
+
     const rows = await db
       .select({
         id: notifications.id,
@@ -151,19 +285,23 @@ app.post(
   }
 );
 
-// Admin-only in spirit (role subscriptions decide who gets alerted on
-// every edit) — unauthenticated in this dev build, like deid-service's
-// GET /audit. Needs the same compliance_officer/tenant_admin-only
-// restriction before this goes near real data (§16).
+// Admin-only: role subscriptions decide who gets alerted on every edit,
+// and who else counts as an admin for this and deid-service's gated
+// endpoints — gated on requireAdminCaller (see its header comment for
+// how caller identity is resolved and verified against this gap being
+// closed; §16 still tracks the bigger "no real Keycloak-integrated RBAC
+// yet" item underneath this).
 app.post(
   '/subscriptions',
   {
     schema: {
       body: CreateSubscriptionSchema,
-      response: { 201: z.object({ id: z.uuid() }) },
+      response: { 201: z.object({ id: z.uuid() }), 401: ErrorResponseSchema, 403: ErrorResponseSchema },
     },
   },
   async (req, reply) => {
+    const caller = await requireAdminCaller(req, reply);
+    if (!caller) return;
     const [row] = await db.insert(alertSubscriptions).values(req.body).returning();
     reply.code(201);
     return { id: row.id };
@@ -172,8 +310,20 @@ app.post(
 
 app.get(
   '/subscriptions',
-  { schema: { response: { 200: z.array(z.record(z.string(), z.unknown())) } } },
-  async () => db.select().from(alertSubscriptions).where(eq(alertSubscriptions.active, true))
+  {
+    schema: {
+      response: {
+        200: z.array(z.record(z.string(), z.unknown())),
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+      },
+    },
+  },
+  async (req, reply) => {
+    const caller = await requireAdminCaller(req, reply);
+    if (!caller) return;
+    return db.select().from(alertSubscriptions).where(eq(alertSubscriptions.active, true));
+  }
 );
 
 app.post(

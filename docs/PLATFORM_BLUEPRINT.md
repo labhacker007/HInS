@@ -42,6 +42,8 @@ Claude artifact: https://claude.ai/artifact/3NRZUR3SC5GoVQi3K1jWSw
 | 2026-10-15 | **Note editing with full version history**, and a real attribution mechanism found for it | Checked directly against the running Medplum instance before building anything: `meta.author` is not auto-populated on writes, and a client-supplied `meta.author` is silently discarded (`meta` is server-controlled) — confirmed the same way that `_history` with `meta.versionId`/`lastUpdated` per version works correctly. Attribution instead lives in `DocumentReference.author`, a normal FHIR field that persists like any data and is preserved per-version in history. Every create/edit sets it to the signed-in practitioner. Built for notes only; `MedicationRequest` editing isn't wired up yet (§16). History is clinician-facing only, not shown in the patient portal — a UX choice, not a limit. |
 | 2026-10-15 | **Voice dictation added, explicitly dev/demo only** | Uses the browser's native `SpeechRecognition` API — in Chrome, that sends audio to Google's cloud speech service, directly contradicting §08's self-hosted-by-default design. No self-hosted Whisper is running in this environment; this is what's real and demonstrable today, labeled as such in the UI next to the button, not quietly shipped as if compliant. What *is* built faithfully to §08.1: no microphone access without a logged `recording`-type consent first (auto-created via the Consent Service if none is active) — a verbal-confirmation simplification, not a captured e-signature, same as every other documented simplification in this codebase. |
 
+| 2026-10-18 | **deid-service + audit-service RBAC hardening**: `GET /audit` (deid-service), `GET`/`POST /subscriptions` and `GET /notifications` (audit-service) are no longer unauthenticated | Researched against the live Medplum instance before implementing (not guessed): `GET /oauth2/userinfo` only returns the User id, not the Practitioner id this needed; forwarding the caller's own token to `GET /fhir/R4/Practitioner/{claimedId}` and checking it returns 200 was tried and found **insecure** on this instance — this project's default Practitioner Access Policy lets any authenticated practitioner read any *other* Practitioner record too, so a claimed id isn't provable that way (verified: Dr. Sharma's real token successfully read Medplum Admin's Practitioner record). What works and isn't spoofable: Medplum's own `GET /auth/me`, which resolves the caller's Practitioner from the token's session server-side with no claimed id involved. Role check reuses `audit-service`'s existing `alert_subscriptions` table directly (role IN `tenant_admin`/`compliance_officer`) rather than a second role table. `GET /notifications` additionally checks the resolved caller's own id matches the requested `recipientId` unless they hold an admin role. Verified end-to-end with real tokens (admin@example.com and dr.sharma@stjones.example, who is seeded but deliberately not in `alert_subscriptions`): every gated endpoint correctly 401s with no token, 403s for Dr. Sharma, and 200s for admin. **Still open, stated in both services' READMEs and §16:** role source of truth is still the hand-seeded table, not real Keycloak RBAC; token validation is a live per-request call to Medplum, not local JWT verification. |
+
 This table grows each session the plan is revisited — see §16 for decisions still open.
 
 ---
@@ -456,14 +458,30 @@ built.
   any grant is recorded. Needs a design pass: does HInS build a reference
   PHR/consent-manager app, or only implement the HIP/HIU side and integrate
   with an existing one?
-- **deid-service hardening** — `GET /audit` and the `pseudonym_mapping`
-  table are unauthenticated in the current build; both need to be
-  restricted to the `compliance_officer` role (§10.1) before this goes
-  near real data. The service also authenticates to Medplum with the
-  admin dev login rather than a proper `client_credentials` service
-  identity (`services/deid-service/src/medplumClient.ts`'s header has the
-  detail) — same underlying gap as the rest of this list's "real service
-  accounts, not shared human logins" theme.
+- **deid-service/audit-service RBAC hardening (2026-10-18 update —
+  partially closed, not fully):** `deid-service`'s `GET /audit`, and
+  `audit-service`'s `GET`/`POST /subscriptions` and `GET /notifications`,
+  are no longer unauthenticated — each now verifies the caller is a real
+  Medplum user on this project (via Medplum's own `GET /auth/me`, not
+  local JWT decoding — see `services/audit-service/src/index.ts`'s
+  `resolveCaller` header comment for what was tried against the live
+  instance and why) and, for the admin-only ones, that the caller has an
+  active `alert_subscriptions` row with role `tenant_admin` or
+  `compliance_officer` (§10.1). `GET /notifications` additionally
+  confirms a non-admin caller's own id matches the `recipientId` they're
+  requesting. **Still open, not hidden:** the role source of truth is
+  still that same hand-seeded `alert_subscriptions` table, not a real
+  Keycloak-integrated RBAC system — this closes "nobody checks who's
+  calling," not "roles come from a trustworthy, centrally-managed
+  source." Token validation is a live call to Medplum per request
+  (correct, adds latency) rather than local JWKS verification.
+  `audit-service`'s `POST /notifications/:id/read` and
+  `/notifications/read-all` remain ungated. The service also
+  authenticates to Medplum with the admin dev login rather than a proper
+  `client_credentials` service identity (`services/deid-service/src/medplumClient.ts`'s
+  header has the detail) — same underlying gap as the rest of this
+  list's "real service accounts, not shared human logins" theme, and
+  separate from the caller-authentication work above.
 - **"Fully EHR/EMR"** — explicitly not attempted in this round, said
   plainly rather than implied done: scheduling, bed/ward management, and
   full order workflows (beyond notes/eRx) are still unbuilt Phase 01
