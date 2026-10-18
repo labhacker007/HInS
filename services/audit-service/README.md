@@ -165,8 +165,10 @@ POST /notifications/read-all   { recipientId }
 POST /subscriptions   { practitionerId, practitionerName, role }
   -> { practitionerId, practitionerName, role }   (201)
   Grants `role` to `practitionerId` in Keycloak (hins-dev realm),
-  creating the Keycloak user on first use if needed. 502 if the
-  Keycloak write itself fails (caller was already verified as admin).
+  creating the Keycloak user on first use if needed. 400 if `role` isn't
+  `tenant_admin`/`compliance_officer`; 502 if the Keycloak write itself
+  fails for a role that did validate (caller was already verified as
+  admin).
 GET  /subscriptions
   -> every practitioner currently holding tenant_admin or
   compliance_officer, queried live from Keycloak.

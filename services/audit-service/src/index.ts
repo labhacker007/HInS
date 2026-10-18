@@ -379,6 +379,7 @@ app.post(
       body: CreateSubscriptionSchema,
       response: {
         201: z.object({ practitionerId: z.string(), practitionerName: z.string(), role: z.string() }),
+        400: ErrorResponseSchema,
         401: ErrorResponseSchema,
         403: ErrorResponseSchema,
         502: ErrorResponseSchema,
@@ -388,6 +389,15 @@ app.post(
   async (req, reply) => {
     const caller = await requireAdminCaller(req, reply);
     if (!caller) return;
+    // Validated here, before the Keycloak call, so a bad role value is a
+    // 400 (client input error) rather than being caught by the generic
+    // catch below and misreported as a 502 "Keycloak itself failed" —
+    // keycloakAssignRole() throws the same check internally too, but
+    // that path is only reached for other (real upstream) failures now.
+    if (!(ADMIN_ROLES as readonly string[]).includes(req.body.role)) {
+      reply.code(400);
+      return { error: 'invalid_role', message: `role must be one of ${ADMIN_ROLES.join(', ')}, got "${req.body.role}".` };
+    }
     try {
       await keycloakAssignRole(req.body.practitionerId, req.body.practitionerName, req.body.role);
     } catch (err) {

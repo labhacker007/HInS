@@ -85,7 +85,7 @@ describes, correctly, and verified against real seeded data. It does
   `KEYCLOAK_BASE_URL` at an unreachable port and confirming an
   otherwise-valid admin token got 403, not 200 (see this repo's build
   record for the exact command/output).
-  **What's still NOT real RBAC/identity, said plainly rather than
+- **What's still NOT real RBAC/identity, said plainly rather than
   implied fixed:** this is a role-SOURCE swap only — Medplum and
   Keycloak are **not federated**. Practitioners/patients still log into
   Medplum directly, completely unchanged by this; Keycloak is only where
