@@ -1,7 +1,7 @@
 # HInS Platform Blueprint
 
-**Project Development & Requirements Document · v0.8**
-Status: Draft — decisions in progress · Scope: India + US, dual-jurisdiction · Last updated: 2026-10-18
+**Project Development & Requirements Document · v0.9**
+Status: Draft — decisions in progress · Scope: India + US, dual-jurisdiction · Last updated: 2026-10-19
 
 A modular, API-first, AI-native hospital operating system — architecture, compliance
 framework, licensing strategy, and roadmap for a multi-specialty deployment spanning
@@ -45,7 +45,10 @@ Claude artifact: https://claude.ai/artifact/3NRZUR3SC5GoVQi3K1jWSw
 | 2026-10-18 | **deid-service + audit-service RBAC hardening**: `GET /audit` (deid-service), `GET`/`POST /subscriptions` and `GET /notifications` (audit-service) are no longer unauthenticated | Researched against the live Medplum instance before implementing (not guessed): `GET /oauth2/userinfo` only returns the User id, not the Practitioner id this needed; forwarding the caller's own token to `GET /fhir/R4/Practitioner/{claimedId}` and checking it returns 200 was tried and found **insecure** on this instance — this project's default Practitioner Access Policy lets any authenticated practitioner read any *other* Practitioner record too, so a claimed id isn't provable that way (verified: Dr. Sharma's real token successfully read Medplum Admin's Practitioner record). What works and isn't spoofable: Medplum's own `GET /auth/me`, which resolves the caller's Practitioner from the token's session server-side with no claimed id involved. Role check reuses `audit-service`'s existing `alert_subscriptions` table directly (role IN `tenant_admin`/`compliance_officer`) rather than a second role table. `GET /notifications` additionally checks the resolved caller's own id matches the requested `recipientId` unless they hold an admin role. Verified end-to-end with real tokens (admin@example.com and dr.sharma@stjones.example, who is seeded but deliberately not in `alert_subscriptions`): every gated endpoint correctly 401s with no token, 403s for Dr. Sharma, and 200s for admin. **Still open, stated in both services' READMEs and §16:** role source of truth is still the hand-seeded table, not real Keycloak RBAC; token validation is a live per-request call to Medplum, not local JWT verification. This hardening also broke `apps/web`'s notification bell (it polled `GET /notifications` with no Authorization header) — caught by an independent reviewer and tester before merge, fixed the same day by threading `useMedplum().getAccessToken()` through `auditApi.ts`'s request helper; re-verified live with a real token (401 with none, 200 with one). |
 | 2026-10-18 | **Consent approval round trip built** (`services/consent-service`, closes the §16 gap this round): `POST /consents` takes an optional `requiresApproval` flag; when true the record lands as `status='pending'` instead of `granted`, and only `POST /consents/:id/approve` or `.../deny` (patient-initiated) can move it out of that state | The one documented exception to the ledger's append-only design (schema.ts's header): a `pending` row is UPDATEd in place on approve/deny rather than inserted as a new row, because a pending request was never an effective grant — there's no history being overwritten. Denial reuses `status='revoked'` with a `statusNote` ("Denied by patient (never approved)") rather than adding a fifth enum value, distinguished from a real post-grant revoke by that note and by `validityStart` never having been set to an approval time. `apps/web`'s `MyConsents`/`ConsentHistoryList` show a "Pending approval" bucket with Approve/Deny actions (patient view only) alongside Active/Revoked/Expired. **Known gap, not hidden:** neither endpoint checks that the caller is actually the patient the pending request is for — anyone who knows a consent id can approve or deny it; real RBAC/ownership enforcement is still open (§16, same theme as the RBAC hardening above). |
 | 2026-10-18 | **Appointment scheduling built** using FHIR's native `Appointment` resource directly via `@medplum/core`, no new backend service | Reuses Medplum rather than building a bespoke scheduling table — `status: 'booked'`/`'cancelled'` only, cancellation is non-destructive (status flip, never a delete). `apps/web` clinician view (`Scheduling.tsx`): patient + practitioner select, date/time/duration, free-text reason, upcoming-appointments table with Cancel. Patient view (`MyAppointments.tsx`): read-only list of their own upcoming appointments. Closes part of the §16 "Fully EHR/EMR" gap (scheduling specifically) — bed/ward management and full order workflows beyond notes/eRx remain unbuilt. **Known gap, not hidden:** no double-booking detection — two appointments for the same practitioner at overlapping times are both accepted silently. |
-| 2026-10-18 | **Practitioner double-booking detection added** to `apps/web`'s `Scheduling.tsx` — `handleBook()` now blocks booking an `Appointment` that overlaps an existing non-cancelled one for the same practitioner | New pure, exported `appointmentsOverlap(existingStart, existingEnd, proposedStart, proposedEnd)` does the real check with half-open `[start, end)` semantics (back-to-back slots allowed), unit-tested standalone outside the browser (true-overlap, exactly-adjacent, identical-slot, contains-both-ways, no-overlap cases, all passing). Tested live against this Medplum instance first rather than assumed: the FHIR `date` search param *does* reliably narrow `Appointment` results to a day range (`ge`/`lt`), and `status:not=cancelled` works too — so `handleBook()` uses both as a coarse server-side narrowing filter (widened a day on each side to tolerate browser/server timezone mismatch at the day boundary), then runs `appointmentsOverlap()` client-side as the actual, precise arbiter — so a narrowing miss can only over-fetch, never hide a real conflict. On conflict, a Mantine notification names the clashing time and patient instead of a generic error, and the form is left as-is. Verified live end-to-end in a real browser (throwaway Playwright driver, `apps/web` on an alternate port): seeded a real overlapping `Appointment` for Dr. Sharma via direct FHIR calls, signed in as her, attempted to book over it — blocked with the expected conflict notification and no new resource created (confirmed via a follow-up FHIR query); a non-overlapping time for the same practitioner booked successfully. **Known gap, not hidden, scoped deliberately:** practitioner-conflict only — same-PATIENT double-booking (one patient booked into two overlapping slots with different practitioners) is still not checked. |
+| 2026-10-18 | **Practitioner double-booking detection added** to `apps/web`'s `Scheduling.tsx` — `handleBook()` now blocks booking an `Appointment` that overlaps an existing non-cancelled one for the same practitioner | New pure, exported `appointmentsOverlap(existingStart, existingEnd, proposedStart, proposedEnd)` does the real check with half-open `[start, end)` semantics (back-to-back slots allowed), unit-tested standalone outside the browser (true-overlap, exactly-adjacent, identical-slot, contains-both-ways, no-overlap cases, all passing). Tested live against this Medplum instance first rather than assumed: the FHIR `date` search param *does* reliably narrow `Appointment` results to a day range (`ge`/`lt`), and `status:not=cancelled` works too — so `handleBook()` uses both as a coarse server-side narrowing filter (widened a day on each side to tolerate browser/server timezone mismatch at the day boundary), then runs `appointmentsOverlap()` client-side as the actual, precise arbiter — so a narrowing miss can only over-fetch, never hide a real conflict. On conflict, a Mantine notification names the clashing time and patient instead of a generic error, and the form is left as-is. Verified live end-to-end in a real browser (throwaway Playwright driver, `apps/web` on an alternate port): seeded a real overlapping `Appointment` for Dr. Sharma via direct FHIR calls, signed in as her, attempted to book over it — blocked with the expected conflict notification and no new resource created (confirmed via a follow-up FHIR query); a non-overlapping time for the same practitioner booked successfully. **Known gap, not hidden, scoped deliberately:** practitioner-conflict only — same-PATIENT double-booking (one patient booked into two overlapping slots with different practitioners) is still not checked; check-then-create is also not atomic (no backend service/DB constraint backs this browser-direct-to-FHIR flow), so two simultaneous bookings for the same overlapping slot could theoretically both pass the pre-check — a real, inherent limitation of this feature's architecture, not something this round fixed. |
+| 2026-10-18 | **Consent approve/deny ownership check added** to `services/consent-service` — `POST /consents/:id/approve` and `.../deny` previously had no caller-identity check at all; anyone who knew a pending consent's id could approve or deny it | Adds a `resolveCaller()`-style check (via Medplum's `GET /auth/me`, generalized to accept both `Practitioner/` and `Patient/` profile prefixes) requiring the resolved caller to be the exact `Patient` the request is for — no admin/practitioner override, since only the patient is meant to decide. Gate runs after the pre-existing 404/409 checks, unchanged. Verified live: no token → 401, a real practitioner token → 403 naming the mismatch, the real patient's own token → 200 with the record actually transitioning. **Known gap, not hidden** (new `services/consent-service/README.md`): legal representative/guardian approval (`CreateConsentSchema`'s optional `grantor.representative` field) is not modeled — only the patient's own resolved identity is ever accepted. This closes the base ownership gap noted in the entry above; the representative sub-case remains open. |
+| 2026-10-18 | **Notification read/read-all ownership check added** to `services/audit-service` — `POST /notifications/:id/read` and `/read-all` previously let any caller mark any notification read with no ownership check | Both routes now apply the exact same self-or-admin pattern `GET /notifications` already used: caller must be the notification's own recipient, or hold an active admin role, to mark it read. `:id/read` fetches the row first to learn its `recipientId` (404 before the auth gate if the id doesn't exist). Verified live with direct Postgres checks that the `read` flag actually flips, not just a 200 with no effect, including the admin-acting-on-someone-else's-notification path. |
+| 2026-10-18 | **Role source of truth for `deid-service`/`audit-service` moved from the hand-seeded `alert_subscriptions` table to a real Keycloak realm** (`hins-dev`) — closes the biggest remaining item from the 2026-10-18 RBAC hardening entry above | `services/{deid,audit}-service/src/keycloakRoles.ts` looks up the caller's realm role (`tenant_admin`/`compliance_officer`) via Keycloak's own Admin REST API, authenticating as a real service-account `client_credentials` identity (not shared bootstrap admin credentials) — the exact Keycloak role set needed (`view-users`+`query-users`+`view-realm`+`manage-users` on `realm-management`, within `hins-dev`'s own self-management pattern) was found empirically against the live instance, not guessed. **Fails closed**: any Keycloak error (unreachable, timeout, malformed response) resolves to "no role" (403) — verified live by pointing a test instance's `KEYCLOAK_BASE_URL` at an unreachable port and confirming an otherwise-valid admin token still got 403, not 200 or 500. Medplum login and caller-identity resolution (`resolveCaller()` via `GET /auth/me`) are completely unchanged — this only moves *where an already-identified caller's role comes from*, not *how the caller is identified*. `audit-service`'s `POST`/`GET /subscriptions` were repointed at Keycloak for real rather than left silently writing to a now-unread table; `alert_subscriptions` the table is kept and still drives `POST /events`' notification fan-out, a separate concern confirmed untouched. Seeded by a new idempotent `scripts/seed/seed-keycloak-roles.mjs`. **Known gap, not hidden:** Medplum and Keycloak are *not federated* — there is no SSO, practitioners/patients still log into Medplum directly, and provisioning a practitioner into Keycloak is still a separate manual/seed step from their Medplum account existing. That reconciliation remains open (§16). |
 
 This table grows each session the plan is revisited — see §16 for decisions still open.
 
@@ -459,41 +462,42 @@ built.
   a clinician-initiated request can now be created with
   `requiresApproval=true`, lands as `status='pending'`, and only moves to
   `granted`/`revoked` (denied) via the patient's own approve/deny action
-  (Decisions log above). **Still open:** this models the mechanics of the
-  round trip, not real ABDM HIP/HIU integration — there's no actual
-  consent-manager app involved, and neither endpoint checks that the
-  caller is the patient the request is for (anyone with the consent id
-  can approve/deny it). Still needs the bigger design pass: does HInS
-  build a reference PHR/consent-manager app, or only implement the
+  (Decisions log above). Both endpoints now also verify the caller is
+  actually that patient (2026-10-18 update, Decisions log above) — the
+  "anyone with the consent id can approve/deny it" gap this bullet used
+  to describe is closed. **Still open:** this models the mechanics of
+  the round trip, not real ABDM HIP/HIU integration — there's no actual
+  consent-manager app involved, and legal representative/guardian
+  approval isn't modeled (only the patient's own resolved Medplum
+  identity is ever accepted). Still needs the bigger design pass: does
+  HInS build a reference PHR/consent-manager app, or only implement the
   HIP/HIU side and integrate with an existing one?
-- **deid-service/audit-service RBAC hardening (2026-10-18 update —
-  partially closed, not fully):** `deid-service`'s `GET /audit`, and
-  `audit-service`'s `GET`/`POST /subscriptions` and `GET /notifications`,
-  are no longer unauthenticated — each now verifies the caller is a real
-  Medplum user on this project (via Medplum's own `GET /auth/me`, not
-  local JWT decoding — see `services/audit-service/src/index.ts`'s
-  `resolveCaller` header comment for what was tried against the live
-  instance and why) and, for the admin-only ones, that the caller has an
-  active `alert_subscriptions` row with role `tenant_admin` or
-  `compliance_officer` (§10.1). `GET /notifications` additionally
-  confirms a non-admin caller's own id matches the `recipientId` they're
-  requesting. **Still open, not hidden:** the role source of truth is
-  still that same hand-seeded `alert_subscriptions` table, not a real
-  Keycloak-integrated RBAC system — this closes "nobody checks who's
-  calling," not "roles come from a trustworthy, centrally-managed
-  source." Token validation is a live call to Medplum per request
-  (correct, adds latency) rather than local JWKS verification.
-  `audit-service`'s `POST /notifications/:id/read` and
-  `/notifications/read-all` remain ungated. The service also
-  authenticates to Medplum with the admin dev login rather than a proper
-  `client_credentials` service identity (`services/deid-service/src/medplumClient.ts`'s
-  header has the detail) — same underlying gap as the rest of this
-  list's "real service accounts, not shared human logins" theme, and
-  separate from the caller-authentication work above. The frontend
-  regression this hardening caused (`apps/web`'s notification bell
-  401ing because `auditApi.ts` sent no Authorization header) was caught
-  before merge and fixed same-day (Decisions log above) — not a
-  remaining item.
+- **deid-service/audit-service RBAC hardening (2026-10-18, substantially
+  closed):** `deid-service`'s `GET /audit`, `audit-service`'s `GET`/
+  `POST /subscriptions`, `GET /notifications`, and (as of the same day's
+  second update) `POST /notifications/:id/read`/`/read-all` are all
+  gated — each verifies the caller is a real Medplum user on this
+  project (via Medplum's own `GET /auth/me`, not local JWT decoding —
+  see `services/audit-service/src/index.ts`'s `resolveCaller` header
+  comment for what was tried against the live instance and why) and,
+  for the admin-only ones, that the caller holds an active role. **The
+  role source of truth is now a real Keycloak realm** (`hins-dev`), not
+  the hand-seeded `alert_subscriptions` table (2026-10-18 update,
+  Decisions log above) — closing what this bullet used to call out as
+  the biggest remaining piece ("roles come from a trustworthy,
+  centrally-managed source"). `deid-service` also now authenticates to
+  Medplum itself via a real `client_credentials` service identity
+  rather than the shared admin dev login (Decisions log, 2026-10-18).
+  **Still open, not hidden:** Medplum and Keycloak are *not federated*
+  — no SSO, practitioners/patients still log into Medplum directly, and
+  provisioning a practitioner into Keycloak is a separate manual/seed
+  step from their Medplum account existing. Token validation (WHO is
+  calling) is still a live call to Medplum's `/auth/me` per request
+  (correct, adds latency) rather than local JWKS verification. The
+  frontend regression the first round of this hardening caused
+  (`apps/web`'s notification bell 401ing because `auditApi.ts` sent no
+  Authorization header) was caught before merge and fixed same-day
+  (Decisions log above) — not a remaining item.
 - **"Fully EHR/EMR"** — scheduling is now built (Decisions log above,
   FHIR `Appointment` via `@medplum/core`), including practitioner
   double-booking detection (Decisions log above) — scoped to
