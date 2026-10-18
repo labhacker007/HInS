@@ -20,12 +20,13 @@ import cors from '@fastify/cors';
 import { randomBytes } from 'node:crypto';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { eq, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { db } from './db/client.js';
 import { disclosureAuditLog, pseudonymMapping } from './db/schema.js';
 import { DeidMethodSchema, ErrorResponseSchema, ExportRequestSchema, ReidentifyRequestSchema } from './schemas.js';
 import { deidentifyResource, newContext, type FhirResource } from './deidentify.js';
 import { fhirGet } from './medplumClient.js';
+import { activeRoleFromKeycloak } from './keycloakRoles.js';
 
 const PORT = Number(process.env.PORT ?? 4003);
 const CONSENT_SERVICE_URL = process.env.CONSENT_SERVICE_URL ?? 'http://localhost:4001';
@@ -65,20 +66,19 @@ async function resolveCaller(authHeader: string | undefined): Promise<AuthedCall
   return { practitionerId: ref.slice('Practitioner/'.length), practitionerName: body?.membership?.profile?.display ?? ref };
 }
 
-/** `alert_subscriptions` is audit-service's own table, not one deid-
- * service's db/schema.ts owns or migrates — but both services point at
- * the same physical Postgres database (postgres://hins:hins@localhost:5433/hins,
- * see infra docs), and it already models exactly "which practitioner has
- * which role for alerting/admin purposes," so it's queried here directly
- * by raw SQL rather than duplicated as a second, driftable role table.
- * Deliberately NOT added as a Drizzle table object in this service's own
- * schema.ts — that would misleadingly imply deid-service owns/migrates
- * it. */
+/**
+ * Role source of truth for this service's admin-role check, as of
+ * 2026-10-18: a real Keycloak realm (`hins-dev`), not the hand-seeded
+ * `alert_subscriptions` Postgres table this used to query directly
+ * (that table was never this service's own — see git history/README for
+ * the prior raw-SQL version this replaced). See
+ * services/deid-service/src/keycloakRoles.ts's file header for the full
+ * design (service-account client_credentials lookup, fail-closed
+ * behavior, caching). `app.log.error` is passed through so a Keycloak
+ * outage is visible in this service's own logs, not swallowed silently.
+ */
 async function activeRoleFor(practitionerId: string): Promise<string | undefined> {
-  const result = await db.execute<{ role: string }>(
-    sql`SELECT role FROM alert_subscriptions WHERE practitioner_id = ${practitionerId} AND active = true LIMIT 1`
-  );
-  return result.rows[0]?.role;
+  return activeRoleFromKeycloak(practitionerId, (msg, err) => app.log.error({ err }, msg));
 }
 
 async function requireAdminCaller(req: FastifyRequest, reply: FastifyReply): Promise<AuthedCaller | undefined> {
@@ -96,7 +96,7 @@ async function requireAdminCaller(req: FastifyRequest, reply: FastifyReply): Pro
     reply.code(403);
     reply.send({
       error: 'forbidden',
-      message: `This endpoint requires an active alert_subscriptions role of ${ADMIN_ROLES.join(' or ')}. Caller Practitioner/${caller.practitionerId} has ${role ?? 'no'} role.`,
+      message: `This endpoint requires a Keycloak realm role of ${ADMIN_ROLES.join(' or ')} (realm "${process.env.KEYCLOAK_REALM ?? 'hins-dev'}"). Caller Practitioner/${caller.practitionerId} has ${role ?? 'no'} role.`,
     });
     return undefined;
   }

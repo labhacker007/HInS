@@ -46,23 +46,59 @@ describes, correctly, and verified against real seeded data. It does
   `GET /auth/me` — not a locally-decoded JWT, see `src/index.ts`'s
   `resolveCaller` header comment for why a naive "forward the token to
   `GET /fhir/R4/Practitioner/{claimedId}`" check was tried first and
-  found spoofable on this instance), AND that caller must have an active
-  `alert_subscriptions` row (audit-service's table, reused directly —
-  see that service's README) with role `tenant_admin` or
-  `compliance_officer`. No token → 401; wrong role → 403 naming the
-  roles required. Both tables still hold real patient IDs and are still
-  sensitive; this closes the *access-control* gap, not the data-
-  sensitivity design, which is unchanged.
-- **What's still NOT real RBAC, said plainly rather than implied fixed:**
-  the role source of truth is still the hand-seeded `alert_subscriptions`
-  table (audit-service's), not a Keycloak-integrated role system —
-  anyone with direct Postgres access or a compromised admin session can
-  still grant themselves/anyone an admin role by inserting a row. Token
-  validation happens via a live call to Medplum's `/auth/me` on *every*
-  request rather than local JWT/JWKS verification — correct today, but
-  slower than it needs to be; a legitimate follow-up, not hidden. Full
-  Keycloak/RBAC integration is still the bigger open item (blueprint
-  §16).
+  found spoofable on this instance), AND that caller must hold a
+  `tenant_admin` or `compliance_officer` role (as of 2026-10-18, from a
+  real Keycloak realm — see below — originally from an active
+  `alert_subscriptions` row, audit-service's table, before that update).
+  No token → 401; wrong role → 403 naming the roles required. This
+  closes the *access-control* gap, not the data-sensitivity design of
+  the underlying tables, which is unchanged.
+- **Role source of truth is now a real Keycloak realm, not the
+  hand-seeded table (2026-10-18 update):** `GET /audit`'s admin-role
+  check (`tenant_admin`/`compliance_officer`) now looks the caller's
+  Practitioner id up in a real Keycloak realm (`hins-dev`, at
+  `KEYCLOAK_BASE_URL`, default `http://localhost:8080`) via the Keycloak
+  Admin REST API — not a row in audit-service's hand-seeded
+  `alert_subscriptions` table anymore. See `src/keycloakRoles.ts`'s file
+  header for the full design: a confidential client with a service
+  account (`serviceAccountsEnabled: true`) inside `hins-dev` calls
+  Keycloak's own Admin API via `client_credentials`, granted the
+  built-in `realm-management` client's `view-users`, `query-users`,
+  `view-realm`, and `manage-users` roles within `hins-dev` (the standard
+  self-realm-management pattern — the exact 4-role set was found
+  **empirically**, not guessed from docs: `view-users`/`query-users`
+  alone 403s on `GET /roles/{role}/users` without also `view-realm`, and
+  403s on creating a user/assigning a role without also `manage-users` —
+  see `scripts/seed/seed-keycloak-roles.mjs`'s header for the exact
+  trail). **Empirically verified live end-to-end**, not shipped on
+  faith: the service account's own token successfully lists users,
+  looks up role-mappings, lists users-by-role, creates a user, and
+  assigns a role, all directly against this Keycloak 26.8 instance — the
+  clean service-account design (not the master-realm-admin fallback this
+  task's brief allowed for) is what actually shipped. Seeded by
+  `scripts/seed/seed-keycloak-roles.mjs`, which also creates the two
+  realm roles and the two practitioner users (keyed by Medplum
+  Practitioner id as `username`, matching how `alert_subscriptions` was
+  keyed). **Fails closed:** any Keycloak outage/timeout/error makes the
+  lookup return "no role" (403), never a 500 and never a silent fallback
+  to the old table — verified live by pointing a test instance's
+  `KEYCLOAK_BASE_URL` at an unreachable port and confirming an
+  otherwise-valid admin token got 403, not 200 (see this repo's build
+  record for the exact command/output).
+  **What's still NOT real RBAC/identity, said plainly rather than
+  implied fixed:** this is a role-SOURCE swap only — Medplum and
+  Keycloak are **not federated**. Practitioners/patients still log into
+  Medplum directly, completely unchanged by this; Keycloak is only where
+  these two services look up an already-Medplum-identified caller's
+  admin role, not an identity provider Medplum delegates login to.
+  There's no SSO between the two systems, and provisioning a
+  practitioner into Keycloak is still a separate manual/seed step from
+  their Medplum account existing — reconciling that is a bigger, separate
+  open item (blueprint §16). Token validation for WHO is calling (as
+  opposed to WHAT role they have) still happens via a live call to
+  Medplum's `/auth/me` on *every* request rather than local JWT/JWKS
+  verification — unchanged by this update, correct today but slower than
+  it needs to be; a legitimate follow-up, not hidden.
 - **Medplum access for this service's own calls to Medplum (export/
   reidentify) now uses a real `client_credentials` grant, not the admin
   dev login (2026-10-18 update):** re-checked directly against this
@@ -89,16 +125,17 @@ POST /reidentify
 
 GET /audit?limit=50
   Requires Authorization: Bearer <Medplum access token> for a caller
-  whose Practitioner has an active alert_subscriptions role of
+  whose Practitioner id is a Keycloak user (hins-dev realm) with role
   tenant_admin or compliance_officer. 401 (no/invalid token) or
-  403 (valid token, wrong role) otherwise.
+  403 (valid token, no/wrong Keycloak role) otherwise.
   -> disclosure_audit_log rows, newest first
 ```
 
-## Try it (needs infra + consent-service + seed:demo already run)
+## Try it (needs infra + consent-service + seed:demo + seed-keycloak-roles already run)
 
 ```bash
-npm run dev -w services/deid-service   # :4003
+node scripts/seed/seed-keycloak-roles.mjs   # one-time (idempotent) Keycloak role-source setup
+npm run dev -w services/deid-service        # :4003
 ```
 
 ```bash
@@ -115,6 +152,18 @@ curl -X POST localhost:4003/export -H 'content-type: application/json' -d '{
 # practitioner — get one the same way apps/web's login does (password +
 # PKCE device flow against :8103), e.g. admin@example.com / medplum_admin:
 curl localhost:4003/audit -H "Authorization: Bearer <token>"
-# -> 401 with no token; 403 if the token's practitioner has no
-#    alert_subscriptions row with role tenant_admin/compliance_officer.
+# -> 401 with no token; 403 if the token's practitioner has no Keycloak
+#    (hins-dev realm) role tenant_admin/compliance_officer.
 ```
+
+**Env vars for the Keycloak role lookup** (dev defaults match what
+`scripts/seed/seed-keycloak-roles.mjs` seeds against this repo's own
+docker-compose Keycloak — a real deployment sets these from a secret
+store):
+
+| Var | Default |
+|---|---|
+| `KEYCLOAK_BASE_URL` | `http://localhost:8080` |
+| `KEYCLOAK_REALM` | `hins-dev` |
+| `KEYCLOAK_SERVICE_CLIENT_ID` | `hins-rbac-service` |
+| `KEYCLOAK_SERVICE_CLIENT_SECRET` | (seed script's generated secret — see `src/keycloakRoles.ts`) |
