@@ -21,7 +21,7 @@
  * set via the invite API — dev only. A real deployment invites by email and
  * lets the person set their own password, with MFA.
  */
-import { PROJECT_ID, adminLogin, must, request, searchOne } from './_medplum-client.mjs';
+import { PROJECT_ID, adminLogin, must, request, searchOne, whoAmI } from './_medplum-client.mjs';
 
 // Must match apps/web/src/lib/hospital.ts / access.ts
 const DEPT_SYSTEM = 'https://hins.example/fhir/department';
@@ -46,6 +46,7 @@ const ROLE_DISPLAY = {
 };
 
 const token = await adminLogin();
+const projectId = PROJECT_ID ?? (await whoAmI(token)).projectId;
 
 const policyCache = new Map();
 async function policyFor(role) {
@@ -74,7 +75,7 @@ async function ensureMember(s) {
   const policyRef = { reference: `AccessPolicy/${policy.id}`, display: policy.name };
   let m = memberByEmail(s.email);
   if (!m) {
-    m = await must(`/admin/projects/${PROJECT_ID}/invite`, {
+    m = await must(`/admin/projects/${projectId}/invite`, {
       method: 'POST',
       token,
       body: {

@@ -19,9 +19,9 @@
  * this codebase — a real deployment sets these from a secret store.
  */
 const MEDPLUM_BASE_URL = process.env.MEDPLUM_BASE_URL ?? 'http://localhost:8103';
-const CLIENT_ID = process.env.MEDPLUM_SERVICE_CLIENT_ID ?? '7e490c9a-62cd-402f-85e2-dc1e91bc62ec';
+const CLIENT_ID = process.env.MEDPLUM_SERVICE_CLIENT_ID || '7e490c9a-62cd-402f-85e2-dc1e91bc62ec';
 const CLIENT_SECRET =
-  process.env.MEDPLUM_SERVICE_CLIENT_SECRET ?? 'dd062171cedf8cbc3f9fa2657146e48d77074962cdde9250fcf4140cf618f435';
+  process.env.MEDPLUM_SERVICE_CLIENT_SECRET || 'dd062171cedf8cbc3f9fa2657146e48d77074962cdde9250fcf4140cf618f435';
 
 let cachedToken: { accessToken: string; expiresAt: number } | undefined;
 

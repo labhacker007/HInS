@@ -8,11 +8,10 @@
  *
  * Usage: node scripts/seed/verify-access-policies.mjs   (exit 1 on any FAIL)
  */
-import { PROJECT_ID, adminLogin, login, request } from './_medplum-client.mjs';
+import { PROJECT_ID as ENV_PROJECT_ID, adminLogin, login, request, demoPatientId, whoAmI } from './_medplum-client.mjs';
 
 const DOC_CATEGORY_SYSTEM = 'https://hins.example/fhir/document-category';
 const STAFF_PW = 'Staff123!';
-const PATIENT = 'Patient/590f0356-27a0-4ead-ada2-20f9f27987a1'; // Asha Verma (demo)
 
 let failures = 0;
 const cleanup = [];
@@ -30,6 +29,12 @@ const is = (code) => (r) => r.status === code;
 const denied = (r) => r.status === 403;
 const rows = (r) => r.json?.entry?.length ?? 0;
 const emptyOk = (r) => r.status === 200 && rows(r) === 0;
+/** 200 and every row carries this document category — i.e. clinical notes
+ * are filtered out, while the role's own reports (e.g. ones seed:showcase
+ * created) may legitimately be visible. */
+const onlyCategory = (code) => (r) =>
+  r.status === 200 &&
+  (r.json.entry ?? []).every((e) => e.resource.category?.some((c) => c.coding?.some((cd) => cd.system === DOC_CATEGORY_SYSTEM && cd.code === code)));
 const created = (r) => r.status === 201;
 
 const get = (t, p) => request(`/fhir/R4/${p}`, { token: t });
@@ -42,6 +47,8 @@ const track = (r) => {
 };
 
 const admin = await adminLogin();
+const PROJECT_ID = ENV_PROJECT_ID ?? (await whoAmI(admin)).projectId;
+const PATIENT = `Patient/${await demoPatientId(admin)}`; // Asha Verma (demo)
 // Fixtures (as admin): a clinical note (no category), a lab order.
 const note = track(await post(admin, 'DocumentReference', {
   status: 'current', type: { text: 'OPD note' }, subject: { reference: PATIENT },
@@ -76,7 +83,7 @@ const order = track(await post(admin, 'ServiceRequest', {
 {
   const t = await login('lab.tech@stjones.example', STAFF_PW, PROJECT_ID);
   const w = 'lab.tech';
-  expect(w, 'GET DocumentReference?subject=<patient> (notes filtered)', await get(t, `DocumentReference?subject=${PATIENT}`), emptyOk);
+  expect(w, 'GET DocumentReference?subject=<patient> (notes filtered)', await get(t, `DocumentReference?subject=${PATIENT}`), onlyCategory('lab-report'));
   const r = await get(t, `DocumentReference/${note.id}`);
   expect(w, 'GET DocumentReference/<clinical note id>', r, (x) => x.status === 403 || x.status === 404);
   expect(w, 'GET Condition', await get(t, 'Condition'), denied);
@@ -124,7 +131,7 @@ const order = track(await post(admin, 'ServiceRequest', {
   const w = 'radiologist';
   expect(w, 'GET ImagingStudy', await get(t, 'ImagingStudy'), is(200));
   expect(w, 'GET ServiceRequest', await get(t, 'ServiceRequest'), is(200));
-  expect(w, 'GET DocumentReference?subject=<patient> (notes filtered)', await get(t, `DocumentReference?subject=${PATIENT}`), emptyOk);
+  expect(w, 'GET DocumentReference?subject=<patient> (notes filtered)', await get(t, `DocumentReference?subject=${PATIENT}`), onlyCategory('imaging-report'));
   expect(w, 'GET Condition', await get(t, 'Condition'), denied);
 }
 
@@ -173,8 +180,9 @@ const order = track(await post(admin, 'ServiceRequest', {
 {
   const t = await login('dr.sharma@stjones.example', 'DrSharma123!', PROJECT_ID);
   const w = 'dr.sharma';
+  const self = `Practitioner/${(await whoAmI(t)).profileId}`;
   expect(w, 'GET Patient?name=a', await get(t, 'Patient?name=a&_count=5'), (x) => x.status === 200 && rows(x) > 0);
-  expect(w, 'GET PractitionerRole?practitioner=<self>', await get(t, 'PractitionerRole?practitioner=Practitioner/62f31908-b0a1-4f84-ae05-b7c877aeb118'), (x) => x.status === 200 && rows(x) > 0);
+  expect(w, 'GET PractitionerRole?practitioner=<self>', await get(t, `PractitionerRole?practitioner=${self}`), (x) => x.status === 200 && rows(x) > 0);
   const enc = track(await post(t, 'Encounter', {
     status: 'finished', class: { system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode', code: 'AMB' }, subject: { reference: PATIENT },
   }));
@@ -182,7 +190,7 @@ const order = track(await post(admin, 'ServiceRequest', {
   expect(w, 'POST DocumentReference (clinical note)', track(await post(t, 'DocumentReference', {
     status: 'current', type: { text: 'OPD note' }, subject: { reference: PATIENT },
     context: enc.status === 201 ? { encounter: [{ reference: `Encounter/${enc.json.id}` }] } : undefined,
-    author: [{ reference: 'Practitioner/62f31908-b0a1-4f84-ae05-b7c877aeb118' }],
+    author: [{ reference: self }],
     content: [{ attachment: { contentType: 'text/plain', data: Buffer.from('RBAC probe note').toString('base64') } }],
   })), created);
   expect(w, 'GET MedicationRequest', await get(t, `MedicationRequest?subject=${PATIENT}`), is(200));

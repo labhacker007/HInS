@@ -7,6 +7,7 @@
  *
  * Usage: node scripts/seed/seed-departments.mjs
  */
+import '../lib/load-env.mjs';
 import { randomBytes } from 'node:crypto';
 
 const MEDPLUM_BASE_URL = process.env.MEDPLUM_BASE_URL ?? 'http://localhost:8103';

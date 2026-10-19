@@ -1,5 +1,21 @@
 # Demo data seeding
 
+On a fresh clone you don't run these one by one:
+
+```bash
+npm run up          # infra + ASR + app containers, then `npm run bootstrap`
+npm run bootstrap   # just the setup + seeds, against an already-running stack
+```
+
+`scripts/bootstrap.mjs` creates the HInS Dev Medplum project, the web
+ClientApplication and the patient test login, writes `.env` /
+`apps/web/.env.local`, applies every service's DB migrations, then runs
+`seed-demo-data` → `seed-departments` → `seed-keycloak-roles` →
+`seed-access-policies` → `seed-staff` → `seed-beds` → `seed-payers` →
+`seed-alert-subscriptions` → `seed:showcase`. It is idempotent; every script
+reads the project id / patient id from `.env` (or looks them up live), so no
+machine-specific ids are hardcoded. Individually:
+
 ```bash
 npm run seed:demo
 ```
@@ -52,9 +68,10 @@ compliant."
 
 ## Notes
 
-- **Not idempotent.** Re-running creates duplicate patients. For a clean
-  reseed, wipe the Postgres volumes (`npm run infra:down -- -v`) and
-  bring the stack back up before re-running.
+- **Not idempotent.** Re-running creates duplicate patients (bootstrap
+  skips it once `dr.sharma@stjones.example` exists). For a clean reseed,
+  wipe the Postgres volumes (`npm run infra:down -- -v`) and run
+  `npm run up` again.
 - Needs `infra:up` and the Consent Service (`npm run dev:consent-service`)
   both running first.
 - All test accounts and their passwords are listed in

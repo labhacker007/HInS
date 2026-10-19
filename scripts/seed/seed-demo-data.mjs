@@ -27,12 +27,10 @@
  *     isn't before treating it as "compliant data."
  *
  * Meant to run ONCE against a fresh stack (docker compose up from clean
- * volumes). It is not idempotent — re-running it creates duplicate
- * patients. If you need a clean reseed, wipe the Postgres volumes and
- * start over (`npm run infra:down -- -v && npm run infra:up`), then
- * re-run the project bootstrap before this script (see
- * docs/PLATFORM_BLUEPRINT.md's Decisions log, 2026-10-15, for how the
- * HInS Dev project itself was created).
+ * volumes). It is not idempotent by itself — re-running it creates
+ * duplicate patients — so `npm run bootstrap` (scripts/bootstrap.mjs),
+ * which creates the HInS Dev project and patient test login this script
+ * needs, only runs it when dr.sharma@stjones.example doesn't exist yet.
  *
  * Usage:
  *   node scripts/seed/seed-demo-data.mjs
@@ -40,11 +38,12 @@
  * Env overrides (defaults match infra/docker-compose.yml):
  *   MEDPLUM_BASE_URL, CONSENT_SERVICE_URL, ADMIN_EMAIL, ADMIN_PASSWORD
  */
+import '../lib/load-env.mjs';
 import { randomBytes, createHash, randomUUID } from 'node:crypto';
+import { demoPatientId } from './_medplum-client.mjs';
 
 const MEDPLUM_BASE_URL = process.env.MEDPLUM_BASE_URL ?? 'http://localhost:8103';
 const CONSENT_SERVICE_URL = process.env.CONSENT_SERVICE_URL ?? 'http://localhost:4001';
-const AUDIT_SERVICE_URL = process.env.AUDIT_SERVICE_URL ?? 'http://localhost:4005';
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? 'admin@example.com';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? 'medplum_admin';
 const MRN_SYSTEM = 'https://hins.example/identifiers/mrn';
@@ -222,29 +221,22 @@ async function main() {
   const fernandesId = fernandesInvite.profile.reference.split('/')[1];
   console.log(`  Practitioner/${fernandesId} (security@stjones.example / SecurityTest123!)`);
 
-  // Role-based alert subscriptions (blueprint §09/§10 -- a placeholder for
-  // real role-derived alerting, see services/audit-service's README): both
-  // get notified in-app whenever anyone edits a note or prescription.
-  console.log('Registering alert subscriptions...');
-  for (const sub of [
-    { practitionerId: adminPractitionerId, practitionerName: 'Medplum Admin', role: 'tenant_admin' },
-    { practitionerId: fernandesId, practitionerName: 'Alex Fernandes', role: 'compliance_officer' },
-  ]) {
-    await fetchJson(`${AUDIT_SERVICE_URL}/subscriptions`, { method: 'POST', body: sub });
-  }
+  // Role-based alert subscriptions (who gets an in-app notification on an
+  // edit) are seeded by seed-alert-subscriptions.mjs, and the admin ROLES
+  // themselves by seed-keycloak-roles.mjs — audit-service's
+  // POST /subscriptions is now an admin-only Keycloak write, so this script
+  // no longer calls it.
 
-  // --- Enrich the existing patient test-login account (created during the
-  // MVP-verification session, docs/PLATFORM_BLUEPRINT.md Decisions log
-  // 2026-10-15) so "My Records" / "My Consents" aren't empty on first
-  // login. This ID is specific to that one bootstrap; if you're seeding a
-  // genuinely fresh project, this lookup just fails gracefully below.
-  const KNOWN_PATIENT_LOGIN_ID = process.env.PATIENT_TEST_LOGIN_ID ?? '590f0356-27a0-4ead-ada2-20f9f27987a1';
+  // --- Enrich the patient test-login account (asha.verma.patient@example.com,
+  // created by `npm run bootstrap`) so "My Records" / "My Consents" aren't
+  // empty on first login. Looked up live by its login email (or
+  // HINS_DEMO_PATIENT_ID); skipped gracefully if it doesn't exist.
   console.log('Looking up the patient test-login account...');
   let ashaLogin;
   try {
-    ashaLogin = await F.get('Patient', KNOWN_PATIENT_LOGIN_ID);
-  } catch {
-    console.log(`  (Patient/${KNOWN_PATIENT_LOGIN_ID} not found — skipping enrichment of the login-linked account)`);
+    ashaLogin = await F.get('Patient', await demoPatientId(adminToken.access_token));
+  } catch (err) {
+    console.log(`  (${err.message} — skipping enrichment of the login-linked account)`);
   }
 
   const patients = [];

@@ -10,7 +10,7 @@
 import { MedplumClient } from '@medplum/core';
 import type { Encounter, Patient, Reference } from '@medplum/fhirtypes';
 // @ts-expect-error -- plain .mjs helper shared with the other seed scripts
-import { login, adminLogin, PROJECT_ID, MEDPLUM_BASE_URL } from '../_medplum-client.mjs';
+import { login, adminLogin, demoPatientId, PROJECT_ID, MEDPLUM_BASE_URL } from '../_medplum-client.mjs';
 import { buildTriageEncounter, buildTriageObservations, buildDiagnosisCondition, buildConsultDocumentReference, buildReferral } from '../../../apps/web/src/lib/clinical';
 import { buildVitalsObservations, buildAllergy, buildLifestyleObservation, buildNutritionOrder, LIFESTYLE_ITEMS } from '../../../apps/web/src/lib/patientProfile';
 import { createOrder, importHl7Oru, signOffReport, findDepartment } from '../../../apps/web/src/lib/diagnostics';
@@ -38,7 +38,7 @@ const findPatient = async (family: string, given: string): Promise<Patient> => {
   if (!list[0]) throw new Error(`Seed patient ${given} ${family} not found — run seed:demo first`);
   return list[0];
 };
-const asha = await admin.readResource('Patient', '590f0356-27a0-4ead-ada2-20f9f27987a1');
+const asha = await admin.readResource('Patient', await demoPatientId(admin.getAccessToken()));
 const ramesh = await findPatient('Iyer', 'Ramesh');
 const fatima = await findPatient('Sheikh', 'Fatima');
 const arjun = await findPatient('Nair', 'Arjun');

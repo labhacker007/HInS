@@ -7,8 +7,15 @@
 # `npm run app:down` can never stop or recreate infra containers.
 #
 # Usage (from repo root):
+#   npm run up         # everything: infra + asr + app + bootstrap (fresh clone)
 #   npm run app:up     # build + start
 #   npm run app:down   # stop + remove app containers only
+#
+# Machine-specific values (Medplum web client id, service-client secrets)
+# are NOT in this file: `npm run bootstrap` writes them to the repo-root
+# .env, and the npm scripts pass it via `--env-file` (scripts/compose.mjs).
+# Before the first bootstrap they're empty, so deid/audit fail closed on
+# admin-role and export calls until `npm run app:up` re-runs with .env.
 #
 # Host ports:  web http://localhost:3080, consent 4001, deid 4003, audit 4005.
 #
@@ -23,6 +30,8 @@ x-service-env: &service-env
   MEDPLUM_BASE_URL: http://medplum-server:8103
   KEYCLOAK_BASE_URL: http://keycloak:8080
   KEYCLOAK_REALM: hins-dev
+  KEYCLOAK_SERVICE_CLIENT_ID: ${KEYCLOAK_SERVICE_CLIENT_ID:-hins-rbac-service}
+  KEYCLOAK_SERVICE_CLIENT_SECRET: ${KEYCLOAK_SERVICE_CLIENT_SECRET:-}
 
 services:
   web:
@@ -32,12 +41,12 @@ services:
       dockerfile: Dockerfile
       target: web
       args:
-        VITE_MEDPLUM_BASE_URL: http://localhost:8103/
-        VITE_MEDPLUM_CLIENT_ID: b62e0e1d-de31-4717-a14d-aa0656e08d6f
-        VITE_CONSENT_SERVICE_URL: http://localhost:4001
-        VITE_AUDIT_SERVICE_URL: http://localhost:4005
-        VITE_ASR_URL: http://localhost:8000
-        VITE_ASR_MODEL: Systran/faster-whisper-small.en
+        VITE_MEDPLUM_BASE_URL: ${VITE_MEDPLUM_BASE_URL:-http://localhost:8103/}
+        VITE_MEDPLUM_CLIENT_ID: ${VITE_MEDPLUM_CLIENT_ID:-}
+        VITE_CONSENT_SERVICE_URL: ${VITE_CONSENT_SERVICE_URL:-http://localhost:4001}
+        VITE_AUDIT_SERVICE_URL: ${VITE_AUDIT_SERVICE_URL:-http://localhost:4005}
+        VITE_ASR_URL: ${VITE_ASR_URL:-http://localhost:8000}
+        VITE_ASR_MODEL: ${VITE_ASR_MODEL:-Systran/faster-whisper-small.en}
     restart: unless-stopped
     ports:
       - '3080:80'
@@ -70,6 +79,8 @@ services:
       <<: *service-env
       PORT: '4003'
       CONSENT_SERVICE_URL: http://consent-service:4001
+      MEDPLUM_SERVICE_CLIENT_ID: ${MEDPLUM_SERVICE_CLIENT_ID:-}
+      MEDPLUM_SERVICE_CLIENT_SECRET: ${MEDPLUM_SERVICE_CLIENT_SECRET:-}
     ports:
       - '4003:4003'
     depends_on:
@@ -92,5 +103,5 @@ services:
 
 networks:
   default:
-    name: infra_default
+    name: ${HINS_INFRA_NETWORK:-infra_default}
     external: true

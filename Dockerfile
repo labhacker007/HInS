@@ -36,7 +36,8 @@ RUN npm run build -w packages/shared \
 # ---------------------------------------------------------------- web build
 FROM build AS web-build
 ARG VITE_MEDPLUM_BASE_URL=http://localhost:8103/
-ARG VITE_MEDPLUM_CLIENT_ID=b62e0e1d-de31-4717-a14d-aa0656e08d6f
+# Machine-specific; written to .env by `npm run bootstrap`, passed by compose.
+ARG VITE_MEDPLUM_CLIENT_ID=
 ARG VITE_CONSENT_SERVICE_URL=http://localhost:4001
 ARG VITE_AUDIT_SERVICE_URL=http://localhost:4005
 ARG VITE_ASR_URL=http://localhost:8000

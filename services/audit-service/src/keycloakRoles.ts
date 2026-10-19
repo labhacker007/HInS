@@ -76,7 +76,7 @@ const SERVICE_CLIENT_ID = process.env.KEYCLOAK_SERVICE_CLIENT_ID ?? 'hins-rbac-s
 // so after a reseed this default may no longer match — set the env var
 // explicitly if so.
 const SERVICE_CLIENT_SECRET =
-  process.env.KEYCLOAK_SERVICE_CLIENT_SECRET ??
+  process.env.KEYCLOAK_SERVICE_CLIENT_SECRET ||
   'NGqvBOqtouGxdBhHADWsQsMBTiFOqEKeCN3vZDu34g80dTeXDrvyPt2y0yoWxqRD7jXlRpCwZXbKGvchDhqg99';
 
 /** Must match ADMIN_ROLES in index.ts — kept as a separate literal here

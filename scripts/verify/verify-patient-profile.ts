@@ -34,10 +34,14 @@ import {
   validateVitals,
 } from '../../apps/web/src/lib/patientProfile.ts';
 
+// @ts-expect-error -- plain .mjs helper shared with the seed scripts (also loads .env)
+import { demoPatientId } from '../seed/_medplum-client.mjs';
+
 const BASE = process.env.MEDPLUM_BASE_URL ?? 'http://localhost:8103';
-const PROJECT = '5dd648ca-aa1d-4828-a372-5021283afa46';
-const PATIENT_ID = '590f0356-27a0-4ead-ada2-20f9f27987a1';
-const PRACTITIONER = { reference: 'Practitioner/62f31908-b0a1-4f84-ae05-b7c877aeb118', display: 'Dr. Sharma' };
+const PROJECT = process.env.MEDPLUM_PROJECT_ID || undefined; // written to .env by `npm run bootstrap`
+// Resolved live in main() — never one machine's hardcoded ids.
+let PATIENT_ID = '';
+let PRACTITIONER = { reference: '', display: 'Dr. Sharma' };
 
 let failures = 0;
 function check(label: string, cond: unknown, extra?: unknown): void {
@@ -84,6 +88,8 @@ const track = <T extends Resource>(r: T): T => (created.push(r), r);
 async function main(): Promise<void> {
   const medplum = new MedplumClient({ baseUrl: BASE, fetch });
   medplum.setAccessToken(await login('dr.sharma@stjones.example', 'DrSharma123!', PROJECT));
+  PATIENT_ID = await demoPatientId();
+  PRACTITIONER = { reference: `Practitioner/${(await medplum.get('auth/me')).profile.id}`, display: 'Dr. Sharma' };
 
   console.log('\n[1] validators');
   check('ABHA number normalised', normalizeAbhaNumber('91 1234 5678 9012') === '91-1234-5678-9012');

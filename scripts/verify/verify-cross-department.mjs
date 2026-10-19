@@ -9,9 +9,9 @@
  *
  * Usage: node scripts/verify/verify-cross-department.mjs
  */
-import { request, must, login, adminLogin, PROJECT_ID } from '../seed/_medplum-client.mjs';
+import { request, must, login, adminLogin, PROJECT_ID, demoPatientId } from '../seed/_medplum-client.mjs';
 
-const PATIENT = 'Patient/590f0356-27a0-4ead-ada2-20f9f27987a1';
+const PATIENT = `Patient/${await demoPatientId()}`;
 const DEPT = 'https://hins.example/fhir/department';
 const DOC_CAT = { coding: [{ system: 'https://hins.example/fhir/document-category', code: 'lab-report', display: 'Lab report' }] };
 const created = [];

@@ -31,6 +31,7 @@
  * Env overrides (defaults match infra/docker-compose.yml):
  *   MEDPLUM_BASE_URL, ADMIN_EMAIL, ADMIN_PASSWORD
  */
+import '../lib/load-env.mjs';
 import { randomBytes } from 'node:crypto';
 
 const MEDPLUM_BASE_URL = process.env.MEDPLUM_BASE_URL ?? 'http://localhost:8103';

@@ -2,12 +2,17 @@
  * Tiny Medplum HTTP client shared by the RBAC seed scripts
  * (seed-access-policies.mjs, seed-staff.mjs). Plain fetch, no deps.
  */
+import '../lib/load-env.mjs';
 import { randomBytes } from 'node:crypto';
 
 export const MEDPLUM_BASE_URL = process.env.MEDPLUM_BASE_URL ?? 'http://localhost:8103';
-export const PROJECT_ID = process.env.MEDPLUM_PROJECT_ID ?? '5dd648ca-aa1d-4828-a372-5021283afa46';
+/** "HInS Dev" project id — written to .env by `npm run bootstrap`. May be
+ * undefined before bootstrap; login() then falls back to picking the
+ * "HInS Dev" membership by name, which works for practitioner logins. */
+export const PROJECT_ID = process.env.MEDPLUM_PROJECT_ID || undefined;
 export const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? 'admin@example.com';
 export const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? 'medplum_admin';
+export const PATIENT_TEST_EMAIL = 'asha.verma.patient@example.com';
 
 /** Returns { status, ok, json } — never throws on HTTP errors (callers decide). */
 export async function request(path, { method = 'GET', body, form, token } = {}) {
@@ -72,4 +77,36 @@ export async function searchOne(token, resourceType, params) {
   const qs = new URLSearchParams(params).toString();
   const b = await must(`/fhir/R4/${resourceType}?${qs}`, { token });
   return b.entry?.[0]?.resource;
+}
+
+/** The ProjectMembership (in the token's project) whose User has this email. */
+export async function membershipByEmail(token, email) {
+  const b = await must('/fhir/R4/ProjectMembership?_count=1000', { token });
+  return (b.entry ?? [])
+    .map((e) => e.resource)
+    .find((m) => m.user?.display?.toLowerCase() === email.toLowerCase());
+}
+
+/** Bare id of the profile (Patient/Practitioner) for a login email, or undefined. */
+export async function profileIdByEmail(token, email) {
+  return (await membershipByEmail(token, email))?.profile?.reference?.split('/')[1];
+}
+
+/** Asha Verma's Patient id — the patient test login's own profile. Looked
+ * up live (or HINS_DEMO_PATIENT_ID) instead of hardcoding one machine's id. */
+export async function demoPatientId(token) {
+  if (process.env.HINS_DEMO_PATIENT_ID) return process.env.HINS_DEMO_PATIENT_ID;
+  const id = await profileIdByEmail(token ?? (await adminLogin()), PATIENT_TEST_EMAIL);
+  if (!id) throw new Error(`No ${PATIENT_TEST_EMAIL} login in HInS Dev — run \`npm run bootstrap\` first`);
+  return id;
+}
+
+/** The token owner's own profile + project, via GET /auth/me. */
+export async function whoAmI(token) {
+  const me = await must('/auth/me', { token });
+  return {
+    profileId: me.profile?.id,
+    profileType: me.profile?.resourceType,
+    projectId: me.project?.id ?? me.membership?.project?.reference?.split('/')[1],
+  };
 }

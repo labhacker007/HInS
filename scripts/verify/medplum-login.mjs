@@ -1,7 +1,10 @@
 /** Tiny Medplum PKCE login + FHIR fetch helper for verification scripts. */
+import '../lib/load-env.mjs';
 import { randomBytes } from 'node:crypto';
 export const BASE = process.env.MEDPLUM_BASE_URL ?? 'http://localhost:8103';
-export const PROJECT_ID = process.env.MEDPLUM_PROJECT_ID ?? '5dd648ca-aa1d-4828-a372-5021283afa46';
+// Written to .env by `npm run bootstrap`; without it, login() picks the
+// "HInS Dev" membership by name.
+export const PROJECT_ID = process.env.MEDPLUM_PROJECT_ID || undefined;
 
 async function j(url, opts, tries = 4) {
   const res = await fetch(url, opts);
