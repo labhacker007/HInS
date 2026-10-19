@@ -62,6 +62,23 @@ import { formatHumanName } from '../lib/fhirFormat.js';
  * prescription be dispensed. On a failed recheck, a clear on-screen
  * message names the actual current status — never a silent no-op.
  *
+ * **Known gap, stated plainly, not glossed over (fixed to disclose,
+ * post-review):** this gate has ZERO server-side backing, not just a
+ * TOCTOU race window like BedBoard's analogous check. Verified live: a
+ * direct FHIR `POST /MedicationDispense` referencing an already-cancelled
+ * `MedicationRequest` via `authorizingPrescription`, sent straight to
+ * Medplum with no involvement of this file at all, is accepted with
+ * `201 Created` and zero resistance — this repo has no `AccessPolicy` or
+ * Bot anywhere (confirmed via `grep`) constraining these writes by the
+ * referenced request's status. `assertStillActive()` only protects a
+ * clinician going through THIS exact React code path; a different UI, a
+ * stale second tab that skips this check, or any direct API caller can
+ * create dispense/administration records against a cancelled/stopped
+ * prescription with no friction whatsoever. Real enforcement needs a
+ * Medplum Bot or Access Policy constraint at the FHIR-server layer — not
+ * built this round, and a materially bigger gap than it might look from
+ * the client-side-only framing above.
+ *
  * ── Live gotcha: `dosage.text` alone is rejected by this Medplum instance
  *    (FHIR invariant mad-1) ──────────────────────────────────────────────
  * Verified directly against this running instance, not assumed from the
@@ -304,8 +321,13 @@ function DispenseForm({
     setSaving(true);
     try {
       // The real gate -- re-checked fresh right now. See this file's
-      // header ("The one real guard this panel enforces").
-      await assertStillActive(medplum, rx.id);
+      // header ("The one real guard this panel enforces"). Fixed
+      // post-review: the fresh resource this returns MUST be the one
+      // used below, not the stale `rx` prop closed over from whenever
+      // this panel last rendered -- a concurrent edit to the medication
+      // text (VersionedRx.tsx's own Edit flow) between page load and
+      // this click would otherwise get silently recorded wrong.
+      const freshRx = await assertStillActive(medplum, rx.id);
 
       const profile = medplum.getProfile();
       const now = new Date().toISOString();
@@ -315,7 +337,9 @@ function DispenseForm({
         // Copies the SAME free-text description already on the
         // MedicationRequest -- never invents a new one. See
         // PatientDetail.tsx's NewRxForm for where this text originates.
-        medicationCodeableConcept: rx.medicationCodeableConcept,
+        // Uses the freshly-reread resource, not the stale `rx` prop --
+        // see the comment on assertStillActive() above.
+        medicationCodeableConcept: freshRx.medicationCodeableConcept,
         subject: { reference: `Patient/${patientId}` },
         authorizingPrescription: [{ reference: `MedicationRequest/${rx.id}` }],
         performer: profile ? [{ actor: { reference: `${profile.resourceType}/${profile.id}`, display: formatHumanName(profile.name) } }] : undefined,
@@ -391,7 +415,9 @@ function AdministerForm({
       // above. A skipped ("not-done") dose still requires an active order
       // behind it -- recording "ordered but not given, and why" against a
       // cancelled/stopped order wouldn't make clinical sense either.
-      await assertStillActive(medplum, rx.id);
+      // Fixed post-review (same bug, same fix as DispenseForm): use the
+      // fresh resource this returns, not the stale `rx` prop.
+      const freshRx = await assertStillActive(medplum, rx.id);
 
       const profile = medplum.getProfile();
       const now = new Date().toISOString();
@@ -399,7 +425,7 @@ function AdministerForm({
         resourceType: 'MedicationAdministration',
         status,
         statusReason: status === 'not-done' && statusReason.trim() ? [{ text: statusReason.trim() }] : undefined,
-        medicationCodeableConcept: rx.medicationCodeableConcept,
+        medicationCodeableConcept: freshRx.medicationCodeableConcept,
         subject: { reference: `Patient/${patientId}` },
         request: { reference: `MedicationRequest/${rx.id}` },
         performer: profile ? [{ actor: { reference: `${profile.resourceType}/${profile.id}`, display: formatHumanName(profile.name) } }] : undefined,
