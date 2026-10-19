@@ -10,6 +10,7 @@ import { Billing } from './Billing.js';
 import { StaffAdmin, StaffNavButton } from '../admin/StaffAdmin.js';
 import { TriageQueue } from './TriageQueue.js';
 import { ReferralInbox } from './ReferralInbox.js';
+import { DiagnosticsQueue } from './DiagnosticsQueue.js';
 import { CatchAll } from '../../App.js';
 import { NotificationBell } from '../../components/NotificationBell.js';
 
@@ -71,6 +72,14 @@ export function ClinicianApp() {
               >
                 Triage &amp; referrals
               </Button>
+              <Button
+                component={Link}
+                to="/lab"
+                variant={location.pathname.startsWith('/lab') || location.pathname.startsWith('/radiology') ? 'light' : 'subtle'}
+                size="sm"
+              >
+                Diagnostics
+              </Button>
             </Group>
             <Text size="sm" c="dimmed">
               {profile?.resourceType === 'Practitioner' &&
@@ -102,6 +111,8 @@ export function ClinicianApp() {
           <Route path="/admin/staff" element={<StaffAdmin />} />
           <Route path="/triage" element={<TriageQueue />} />
           <Route path="/referrals" element={<ReferralInbox />} />
+          <Route path="/lab" element={<DiagnosticsQueue key="lab" dept="laboratory" />} />
+          <Route path="/radiology" element={<DiagnosticsQueue key="rad" dept="radiology" />} />
           <Route path="*" element={<CatchAll to="/" />} />
         </Routes>
       </AppShell.Main>

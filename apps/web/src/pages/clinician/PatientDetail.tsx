@@ -30,6 +30,8 @@ import { PatientAllergies } from '../../components/PatientAllergies.js';
 import { PatientVitals } from '../../components/PatientVitals.js';
 import { ConsultNote } from '../../components/ConsultNote.js';
 import { ReferralPanel } from '../../components/ReferralPanel.js';
+import { DiagnosticOrders } from '../../components/DiagnosticOrders.js';
+import { DiagnosticResults } from '../../components/DiagnosticResults.js';
 
 const ENCOUNTER_CLASS = {
   OPD: { system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode', code: 'AMB', display: 'ambulatory' },
@@ -97,6 +99,8 @@ export function PatientDetail() {
           <Tabs.Tab value="lifestyle">Social history &amp; diet</Tabs.Tab>
           <Tabs.Tab value="consult">Consult note</Tabs.Tab>
           <Tabs.Tab value="referrals">Referrals</Tabs.Tab>
+          <Tabs.Tab value="dx-orders">Lab & imaging orders</Tabs.Tab>
+          <Tabs.Tab value="dx-results">Diagnostic reports</Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="notes" pt="md">
@@ -163,6 +167,14 @@ export function PatientDetail() {
 
         <Tabs.Panel value="referrals" pt="md">
           <ReferralPanel patientId={id} patientName={formatHumanName(patient.name)} />
+        </Tabs.Panel>
+
+        <Tabs.Panel value="dx-orders" pt="md">
+          <DiagnosticOrders patientId={id} />
+        </Tabs.Panel>
+
+        <Tabs.Panel value="dx-results" pt="md">
+          <DiagnosticResults patientId={id} />
         </Tabs.Panel>
       </Tabs>
     </Stack>
