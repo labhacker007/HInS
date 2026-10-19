@@ -24,6 +24,8 @@ import { VersionedNote } from '../../components/VersionedNote.js';
 import { VersionedRx } from '../../components/VersionedRx.js';
 import { DictateButton } from '../../components/DictateButton.js';
 import { ConsentHistoryList } from '../../components/ConsentHistoryList.js';
+import { DiagnosticOrders } from '../../components/DiagnosticOrders.js';
+import { DiagnosticResults } from '../../components/DiagnosticResults.js';
 
 const ENCOUNTER_CLASS = {
   OPD: { system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode', code: 'AMB', display: 'ambulatory' },
@@ -85,6 +87,8 @@ export function PatientDetail() {
           <Tabs.Tab value="labs">Labs</Tabs.Tab>
           <Tabs.Tab value="rx">Prescriptions</Tabs.Tab>
           <Tabs.Tab value="consent">Consent</Tabs.Tab>
+          <Tabs.Tab value="dx-orders">Lab & imaging orders</Tabs.Tab>
+          <Tabs.Tab value="dx-results">Diagnostic reports</Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="notes" pt="md">
@@ -130,6 +134,14 @@ export function PatientDetail() {
 
         <Tabs.Panel value="consent" pt="md">
           <RequestConsentPanel patientId={id} requesterId={profile?.id} requesterName={formatHumanName(profile?.name)} />
+        </Tabs.Panel>
+
+        <Tabs.Panel value="dx-orders" pt="md">
+          <DiagnosticOrders patientId={id} />
+        </Tabs.Panel>
+
+        <Tabs.Panel value="dx-results" pt="md">
+          <DiagnosticResults patientId={id} />
         </Tabs.Panel>
       </Tabs>
     </Stack>
