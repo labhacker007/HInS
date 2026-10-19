@@ -1,4 +1,6 @@
 import type { BinarySource, MedplumClient } from '@medplum/core';
+// Required: RBAC (seed-access-policies.mjs) only lets lab/radiology staff see DocumentReferences carrying this category.
+import { docCategory } from './access.js';
 import type {
   Attachment,
   Bundle,
@@ -398,6 +400,7 @@ export async function uploadResultDocument(
     resourceType: 'DocumentReference',
     status: 'current',
     type: { text: kindOf(sr) === 'imaging' ? 'Radiology result document' : 'Laboratory result document' },
+    category: [docCategory(kindOf(sr) === 'imaging' ? 'imaging-report' : 'lab-report')],
     subject: sr.subject as Reference<Patient>,
     date: new Date().toISOString(),
     author: f.uploaderId ? [{ reference: `Practitioner/${f.uploaderId}` }] : undefined,
@@ -560,6 +563,7 @@ export async function importHl7Oru(
     resourceType: 'DocumentReference',
     status: 'current',
     type: { text: 'HL7 v2 ORU^R01 source message' },
+    category: [docCategory(kindOf(sr) === 'imaging' ? 'imaging-report' : 'lab-report')],
     subject: sr.subject as Reference<Patient>,
     date: new Date().toISOString(),
     author: opts.uploaderId ? [{ reference: `Practitioner/${opts.uploaderId}` }] : undefined,
@@ -665,6 +669,7 @@ export async function importDicom(
     resourceType: 'DocumentReference',
     status: 'current',
     type: { text: 'DICOM object' },
+    category: [docCategory('imaging-report')],
     subject: sr.subject as Reference<Patient>,
     date: new Date().toISOString(),
     author: f.uploaderId ? [{ reference: `Practitioner/${f.uploaderId}` }] : undefined,

@@ -31,6 +31,7 @@ const PASSWORD = 'Staff123!';
 
 const STAFF = [
   { email: 'lab.tech@stjones.example', given: 'Ravi', family: 'Kumar', role: 'lab-technician', dept: 'laboratory' },
+  { email: 'pathologist@stjones.example', given: 'Anil', family: 'Desai', role: 'pathologist', dept: 'laboratory' },
   { email: 'radiologist@stjones.example', given: 'Meera', family: 'Iyer', role: 'radiologist', dept: 'radiology' },
   { email: 'pharmacist@stjones.example', given: 'Arjun', family: 'Mehta', role: 'pharmacist', dept: 'pharmacy' },
   { email: 'billing@stjones.example', given: 'Neha', family: 'Gupta', role: 'billing-staff', dept: 'billing' },

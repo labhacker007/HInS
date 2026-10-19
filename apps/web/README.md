@@ -148,6 +148,20 @@ and `audit-service` running too — see the repo root README).
 | Clinician — Dr. Priya Sharma, Cardiology (`seed:demo`) | `dr.sharma@stjones.example` | `DrSharma123!` |
 | Compliance & Security — Alex Fernandes (`seed:demo`) | `security@stjones.example` | `SecurityTest123!` |
 | Patient — Asha Verma (`seed:demo` enriches this account) | `asha.verma.patient@example.com` | `PatientTest123!` |
+| Hospital Admin — Administration (`seed-staff.mjs`) | `hospital.admin@stjones.example` | `Staff123!` |
+| Lab Technician — Laboratory | `lab.tech@stjones.example` | `Staff123!` |
+| Pathologist — Laboratory (signs lab reports) | `pathologist@stjones.example` | `Staff123!` |
+| Radiologist — Radiology (signs imaging reports) | `radiologist@stjones.example` | `Staff123!` |
+| Pharmacist — Pharmacy | `pharmacist@stjones.example` | `Staff123!` |
+| Billing Staff — Billing & Insurance | `billing@stjones.example` | `Staff123!` |
+| Triage Nurse — Emergency | `triage.nurse@stjones.example` | `Staff123!` |
+| Dietitian — Nutrition & Dietetics | `dietitian@stjones.example` | `Staff123!` |
+
+Each staff login above has a role-specific Medplum AccessPolicy enforced
+server-side (`scripts/seed/seed-access-policies.mjs`); re-run
+`node scripts/seed/verify-access-policies.mjs` and
+`node scripts/verify/verify-cross-department.mjs` to confirm enforcement.
+Seed order on a fresh stack: `seed-departments.mjs` → `seed-access-policies.mjs` → `seed-staff.mjs`.
 
 All plaintext dev-only credentials for the local `HInS Dev` Medplum
 project — never reuse them anywhere reachable outside this machine.
