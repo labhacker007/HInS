@@ -4,6 +4,7 @@ import { notifications } from '@mantine/notifications';
 import type { Bundle, MedicationRequest } from '@medplum/fhirtypes';
 import { useMedplum } from '@medplum/react';
 import { recordEditEvent } from '../lib/auditApi.js';
+import { PharmacyPanel } from './PharmacyDispense.js';
 
 /**
  * A prescription with inline edit and full version history — the same
@@ -21,6 +22,11 @@ import { recordEditEvent } from '../lib/auditApi.js';
  * "who last corrected a typo in it," and conflating them would lose the
  * original prescriber of record for a controlled-substance-style audit
  * trail.
+ *
+ * Also renders `PharmacyPanel` (PharmacyDispense.tsx) directly under each
+ * prescription — dispensing/administration is read right alongside the
+ * order it's against, not a separate page. See that file's own header
+ * for the full pharmacy-dispensing design (§13/§13a "02a").
  */
 const LAST_MODIFIED_BY_EXT = 'https://hins.example/fhir/StructureDefinition/last-modified-by';
 
@@ -132,6 +138,13 @@ export function VersionedRx({
               </Button>
             </Group>
           </Group>
+          {/* Pharmacy dispensing/administration -- a separate concern from
+              the correction-history above (that's "fix a mistaken entry on
+              this order"; this is "a real-world event happened against
+              it"), kept in its own file (PharmacyDispense.tsx) and rendered
+              right alongside the order it's against rather than a separate
+              page -- see that file's header for the full design. */}
+          <PharmacyPanel rx={rx} patientId={patientId} />
         </>
       )}
 
