@@ -36,6 +36,8 @@ services:
         VITE_MEDPLUM_CLIENT_ID: b62e0e1d-de31-4717-a14d-aa0656e08d6f
         VITE_CONSENT_SERVICE_URL: http://localhost:4001
         VITE_AUDIT_SERVICE_URL: http://localhost:4005
+        VITE_ASR_URL: http://localhost:8000
+        VITE_ASR_MODEL: Systran/faster-whisper-small.en
     restart: unless-stopped
     ports:
       - '3080:80'
