@@ -1,34 +1,46 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
-import { Stack, Title, TextInput, Select, Button, Group } from '@mantine/core';
+import { Stack, Title, Button, Group, Text } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { useMedplum } from '@medplum/react';
-import { MRN_SYSTEM } from '../../lib/fhirFormat.js';
+import { useMedplum, useMedplumProfile } from '@medplum/react';
+import { MRN_SYSTEM, formatHumanName } from '../../lib/fhirFormat.js';
+import { DemographicsFields } from '../../components/PatientDemographics.js';
+import { EMPTY_DEMOGRAPHICS, saveDemographics, validateDemographics, type DemographicsForm } from '../../lib/patientProfile.js';
 
-/** Registration — Phase 01 (blueprint §13), the first step of the OPD workflow. */
+/**
+ * Registration — Phase 01 (blueprint §13), the first step of the OPD workflow.
+ * Captures full demographics (see components/PatientDemographics.tsx and
+ * lib/patientProfile.ts); only first/family name and DOB are mandatory so a
+ * busy front desk can register fast and complete the rest later from the
+ * patient's Demographics tab.
+ */
 export function NewPatient() {
   const medplum = useMedplum();
+  const profile = useMedplumProfile();
   const navigate = useNavigate();
-  const [given, setGiven] = useState('');
-  const [family, setFamily] = useState('');
-  const [birthDate, setBirthDate] = useState('');
-  const [gender, setGender] = useState<string | null>(null);
-  const [phone, setPhone] = useState('');
+  const [form, setForm] = useState<DemographicsForm>({ ...EMPTY_DEMOGRAPHICS });
+  const [showErrors, setShowErrors] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  const canSave = given.trim() && family.trim() && birthDate;
+  const errors = validateDemographics(form);
+  const hasErrors = Object.keys(errors).length > 0;
 
   async function handleSave() {
+    if (hasErrors) {
+      setShowErrors(true);
+      return;
+    }
     setSaving(true);
     try {
-      const patient = await medplum.createResource({
-        resourceType: 'Patient',
-        name: [{ given: [given.trim()], family: family.trim() }],
-        birthDate,
-        gender: (gender as 'male' | 'female' | 'other' | 'unknown' | undefined) ?? undefined,
-        telecom: phone ? [{ system: 'phone', value: phone }] : undefined,
-        identifier: [{ system: MRN_SYSTEM, value: crypto.randomUUID().slice(0, 8).toUpperCase() }],
-      });
+      const performer =
+        profile?.resourceType === 'Practitioner' ? { reference: `Practitioner/${profile.id}`, display: formatHumanName(profile.name) } : undefined;
+      const patient = await saveDemographics(
+        medplum,
+        form,
+        undefined,
+        { identifier: [{ system: MRN_SYSTEM, value: crypto.randomUUID().slice(0, 8).toUpperCase() }] },
+        performer,
+      );
       notifications.show({ message: 'Patient registered', color: 'green' });
       navigate(`/patients/${patient.id}`);
     } catch (err) {
@@ -39,29 +51,22 @@ export function NewPatient() {
   }
 
   return (
-    <Stack maw={480}>
+    <Stack maw={960}>
       <Title order={3}>Register new patient</Title>
-      <TextInput label="Given name" required value={given} onChange={(e) => setGiven(e.currentTarget.value)} />
-      <TextInput label="Family name" required value={family} onChange={(e) => setFamily(e.currentTarget.value)} />
-      <TextInput
-        label="Date of birth"
-        type="date"
-        required
-        value={birthDate}
-        onChange={(e) => setBirthDate(e.currentTarget.value)}
+      <Text size="sm" c="dimmed">
+        Required: first name, family name, date of birth. Everything else can be completed later.
+      </Text>
+      <DemographicsFields
+        value={form}
+        onChange={setForm}
+        // Required-field errors only after a save attempt; format errors as soon as a field has content.
+        errors={showErrors ? errors : Object.fromEntries(Object.entries(errors).filter(([k]) => form[k as keyof DemographicsForm]))}
       />
-      <Select
-        label="Gender"
-        data={['male', 'female', 'other', 'unknown']}
-        value={gender}
-        onChange={setGender}
-      />
-      <TextInput label="Phone" value={phone} onChange={(e) => setPhone(e.currentTarget.value)} />
       <Group justify="flex-end" mt="md">
         <Button variant="subtle" onClick={() => navigate(-1)}>
           Cancel
         </Button>
-        <Button disabled={!canSave} loading={saving} onClick={handleSave}>
+        <Button loading={saving} onClick={handleSave}>
           Register
         </Button>
       </Group>

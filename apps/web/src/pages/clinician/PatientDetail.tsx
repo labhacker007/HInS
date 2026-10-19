@@ -24,6 +24,10 @@ import { VersionedNote } from '../../components/VersionedNote.js';
 import { VersionedRx } from '../../components/VersionedRx.js';
 import { DictateButton } from '../../components/DictateButton.js';
 import { ConsentHistoryList } from '../../components/ConsentHistoryList.js';
+import { PatientDemographics } from '../../components/PatientDemographics.js';
+import { PatientLifestyle } from '../../components/PatientLifestyle.js';
+import { PatientAllergies } from '../../components/PatientAllergies.js';
+import { PatientVitals } from '../../components/PatientVitals.js';
 
 const ENCOUNTER_CLASS = {
   OPD: { system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode', code: 'AMB', display: 'ambulatory' },
@@ -85,6 +89,10 @@ export function PatientDetail() {
           <Tabs.Tab value="labs">Labs</Tabs.Tab>
           <Tabs.Tab value="rx">Prescriptions</Tabs.Tab>
           <Tabs.Tab value="consent">Consent</Tabs.Tab>
+          <Tabs.Tab value="demographics">Demographics</Tabs.Tab>
+          <Tabs.Tab value="allergies">Allergies</Tabs.Tab>
+          <Tabs.Tab value="vitals">Vitals</Tabs.Tab>
+          <Tabs.Tab value="lifestyle">Social history &amp; diet</Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="notes" pt="md">
@@ -130,6 +138,19 @@ export function PatientDetail() {
 
         <Tabs.Panel value="consent" pt="md">
           <RequestConsentPanel patientId={id} requesterId={profile?.id} requesterName={formatHumanName(profile?.name)} />
+        </Tabs.Panel>
+
+        <Tabs.Panel value="demographics" pt="md">
+          <PatientDemographics patient={patient} onSaved={reload} />
+        </Tabs.Panel>
+        <Tabs.Panel value="allergies" pt="md">
+          <PatientAllergies patientId={id} />
+        </Tabs.Panel>
+        <Tabs.Panel value="vitals" pt="md">
+          <PatientVitals patientId={id} />
+        </Tabs.Panel>
+        <Tabs.Panel value="lifestyle" pt="md">
+          <PatientLifestyle patientId={id} />
         </Tabs.Panel>
       </Tabs>
     </Stack>
