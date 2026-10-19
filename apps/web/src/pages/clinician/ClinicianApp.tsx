@@ -7,6 +7,7 @@ import { PatientDetail } from './PatientDetail.js';
 import { Scheduling } from './Scheduling.js';
 import { BedBoard } from './BedBoard.js';
 import { Billing } from './Billing.js';
+import { StaffAdmin, StaffNavButton } from '../admin/StaffAdmin.js';
 import { CatchAll } from '../../App.js';
 import { NotificationBell } from '../../components/NotificationBell.js';
 
@@ -59,6 +60,7 @@ export function ClinicianApp() {
               >
                 Billing
               </Button>
+              <StaffNavButton />
             </Group>
             <Text size="sm" c="dimmed">
               {profile?.resourceType === 'Practitioner' &&
@@ -87,6 +89,7 @@ export function ClinicianApp() {
           <Route path="/schedule" element={<Scheduling />} />
           <Route path="/beds" element={<BedBoard />} />
           <Route path="/billing" element={<Billing />} />
+          <Route path="/admin/staff" element={<StaffAdmin />} />
           <Route path="*" element={<CatchAll to="/" />} />
         </Routes>
       </AppShell.Main>
