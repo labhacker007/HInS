@@ -32,22 +32,35 @@
 # postgres-hins is a SEPARATE Postgres instance from Medplum's own, on
 # purpose (docs §06, Decisions log): our own services (consent-service,
 # terminology-service, ...) own their data independently of whatever
-# version/schema Medplum's image requires, so Medplum's postgres stays
-# pinned to the version it ships tested against (16) while our services get
-# current Postgres (18 — async I/O, UUIDv7) with pgvector built in for the
-# embeddings/RAG work in docs §08 (CDSS groundedness checks, semantic
-# search). Image is pgvector/pgvector:pg18 — the pgvector project's own
-# Postgres-18 build, not a custom Dockerfile.
+# version/schema Medplum's image requires. Image is pgvector/pgvector:pg18
+# — the pgvector project's own Postgres-18 build, not a custom Dockerfile.
+#
+# Medplum's own postgres was upgraded 16 -> 18 on 2026-10-19 (Decisions
+# log) to match this one's major version — not because Medplum requires
+# 18 (its own docs use 16 in install examples and state no explicit
+# minimum/maximum), but because this environment already runs 18
+# successfully for postgres-hins and keeping both instances on the same
+# major version reduces operational complexity. Done via a real
+# pg_dumpall + restore into a fresh volume (medplum-postgres18-data),
+# NOT an in-place image-tag swap — Postgres major versions are not
+# binary-compatible data-directory formats, so swapping the tag alone
+# on the existing volume would have failed to start. The old pg16
+# volume (medplum-postgres-data) and its container (renamed
+# infra-postgres-1-pg16-retired, stopped not removed) are kept as a
+# rollback safety net, not deleted.
 
 services:
   postgres:
-    image: postgres:16
+    image: postgres:18
     restart: unless-stopped
     environment:
       - POSTGRES_USER=medplum
       - POSTGRES_PASSWORD=medplum
+    # Postgres 18's image moved its volume mount to /var/lib/postgresql
+    # (not /var/lib/postgresql/data like postgres:16) -- same layout
+    # change already documented below for pgvector/pgvector:pg18.
     volumes:
-      - medplum-postgres-data:/var/lib/postgresql/data
+      - medplum-postgres18-data:/var/lib/postgresql
     command:
       - 'postgres'
       - '-c'
@@ -153,5 +166,6 @@ services:
       - '8080:8080'
 
 volumes:
-  medplum-postgres-data:
+  medplum-postgres-data: # pg16, retired 2026-10-19 -- kept as a rollback safety net, no longer mounted by any service
+  medplum-postgres18-data:
   hins-postgres-data:
