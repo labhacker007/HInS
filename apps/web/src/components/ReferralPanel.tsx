@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Stack, Group, Select, TextInput, Button, Text, Paper, Badge, Loader, Divider } from '@mantine/core';
+import { Stack, Group, Select, Button, Text, Paper, Badge, Loader, Divider } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import type { Condition, Encounter, ServiceRequest } from '@medplum/fhirtypes';
 import { useMedplum, useMedplumProfile } from '@medplum/react';
@@ -7,6 +7,7 @@ import { formatHumanName } from '../lib/fhirFormat.js';
 import { DEPARTMENTS } from '../lib/hospital.js';
 import { useDepartments } from '../lib/useDepartments.js';
 import { REFERRAL_CATEGORY, buildReferral, referralState, type ReferralPriority } from '../lib/clinical.js';
+import { DictationTextInput } from './DictationTextarea.js';
 
 /**
  * Patient-chart "Referrals" tab: refer this patient to another department
@@ -112,7 +113,7 @@ export function ReferralPanel({ patientId, patientName }: { patientId: string; p
               allowDeselect={false}
             />
           </Group>
-          <TextInput label="Requested service" placeholder="e.g. Cardiology opinion, echocardiogram, diet counselling" value={what} onChange={(e) => setWhat(e.currentTarget.value)} required />
+          <DictationTextInput label="Requested service" placeholder="e.g. Cardiology opinion, echocardiogram, diet counselling" value={what} onValueChange={setWhat} patientId={patientId} required />
           <Group grow>
             <Select
               label="Linked diagnosis (optional)"
@@ -122,7 +123,7 @@ export function ReferralPanel({ patientId, patientName }: { patientId: string; p
               onChange={setReasonCondition}
               clearable
             />
-            <TextInput label="Reason" placeholder="Clinical question for the receiving team" value={reason} onChange={(e) => setReason(e.currentTarget.value)} />
+            <DictationTextInput label="Reason" placeholder="Clinical question for the receiving team" value={reason} onValueChange={setReason} patientId={patientId} />
           </Group>
           <Group justify="space-between">
             <Text size="xs" c="dimmed">

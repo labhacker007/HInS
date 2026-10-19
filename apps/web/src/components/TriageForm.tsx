@@ -13,6 +13,7 @@ import {
   type VitalKey,
   type VitalValues,
 } from '../lib/clinical.js';
+import { DictationTextInput } from './DictationTextarea.js';
 
 /** Departments a patient can be triaged INTO (clinical intake points). */
 export const TRIAGE_DEPARTMENTS = ['emergency', 'general-medicine', 'cardiology', 'pediatrics'] as const;
@@ -182,11 +183,12 @@ export function TriageForm({ depts, onCreated }: { depts: Record<string, Organiz
             allowDeselect={false}
           />
         </Group>
-        <TextInput
+        <DictationTextInput
           label="Chief complaint"
           placeholder="In the patient's words, e.g. 'chest pain since 2 hours'"
           value={complaint}
-          onChange={(e) => setComplaint(e.currentTarget.value)}
+          onValueChange={setComplaint}
+          patientId={patient?.id}
           required
         />
 

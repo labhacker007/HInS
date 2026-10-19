@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Paper, Group, Text, Badge, Textarea, Button, Stack, Collapse, Divider, Loader } from '@mantine/core';
+import { Paper, Group, Text, Badge, Button, Stack, Collapse, Divider, Loader } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import type { Bundle, DocumentReference } from '@medplum/fhirtypes';
 import { useMedplum } from '@medplum/react';
 import { recordEditEvent } from '../lib/auditApi.js';
+import { DictationTextarea } from './DictationTextarea.js';
 
 /**
  * A clinical note with inline edit and full version history — clinician
@@ -107,7 +108,7 @@ export function VersionedNote({
 
       {editing ? (
         <Stack gap="xs">
-          <Textarea value={draft} onChange={(e) => setDraft(e.currentTarget.value)} minRows={4} autosize />
+          <DictationTextarea value={draft} onValueChange={setDraft} minRows={4} autosize patientId={patientId} />
           <Group justify="flex-end" gap="xs">
             <Button size="xs" variant="subtle" onClick={() => setEditing(false)} disabled={saving}>
               Cancel

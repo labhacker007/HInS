@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
-import { Stack, Group, Title, Select, SegmentedControl, Button, Text, Loader, TextInput } from '@mantine/core';
+import { Stack, Group, Title, Select, SegmentedControl, Button, Text, Loader } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import type { ServiceRequest } from '@medplum/fhirtypes';
 import { useMedplum, useMedplumProfile } from '@medplum/react';
@@ -8,6 +8,7 @@ import { formatHumanName } from '../../lib/fhirFormat.js';
 import { useDepartments } from '../../lib/useDepartments.js';
 import { REFERRAL_CATEGORY, acceptReferral, completeReferral, referralState } from '../../lib/clinical.js';
 import { REFERRAL_TARGETS, ReferralCard } from '../../components/ReferralPanel.js';
+import { DictationTextInput } from '../../components/DictationTextarea.js';
 
 /**
  * Department referral inbox (/referrals): every referral addressed to
@@ -148,14 +149,12 @@ export function ReferralInbox() {
                 )}
                 {st === 'accepted' && (
                   <>
-                    <TextInput
+                    <DictationTextInput
                       size="xs"
                       placeholder="Outcome (optional)"
                       value={outcome[sr.id!] ?? ''}
-                      onChange={(e) => {
-                        const v = e.currentTarget.value;
-                        setOutcome((o) => ({ ...o, [sr.id!]: v }));
-                      }}
+                      onValueChange={(v) => setOutcome((o) => ({ ...o, [sr.id!]: v }))}
+                      patientId={pid}
                     />
                     <Button size="xs" color="green" loading={busy === sr.id} onClick={() => act(sr, 'complete')}>
                       Complete

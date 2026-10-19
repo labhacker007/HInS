@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Anchor, Badge, Button, Group, Loader, Paper, Stack, Table, Text, Textarea, TextInput } from '@mantine/core';
+import { Alert, Anchor, Badge, Button, Group, Loader, Paper, Stack, Table, Text } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import type { Attachment, DiagnosticReport, DocumentReference, ImagingStudy, Observation, Reference } from '@medplum/fhirtypes';
 import { useMedplum, useMedplumProfile } from '@medplum/react';
@@ -17,6 +17,7 @@ import {
   SIGNER_ROLE,
   type PatientReport,
 } from '../lib/diagnostics.js';
+import { DictationTextarea, DictationTextInput } from './DictationTextarea.js';
 
 /**
  * Patient-chart results view + the report card reused by the /lab and
@@ -197,6 +198,7 @@ export function ReportCard({
   const medplum = useMedplum();
   const profile = useMedplumProfile();
   const kind = reportKind(report);
+  const patientId = report.subject?.reference?.startsWith('Patient/') ? report.subject.reference.slice('Patient/'.length) : undefined;
   const open = ['registered', 'partial', 'preliminary'].includes(report.status);
   const signed = ['final', 'amended', 'corrected'].includes(report.status);
   const mayAct = profile?.resourceType === 'Practitioner' && canSignOff(roles, kind);
@@ -255,7 +257,7 @@ export function ReportCard({
         )}
         {open && mayAct && (
           <Stack gap="xs">
-            <Textarea label="Conclusion / impression" minRows={3} value={conclusion} onChange={(e) => setConclusion(e.currentTarget.value)} />
+            <DictationTextarea label="Conclusion / impression" minRows={3} value={conclusion} onValueChange={setConclusion} patientId={patientId} />
             <Group justify="flex-end">
               <Button size="xs" loading={busy} disabled={!conclusion.trim()} onClick={() => act('sign')}>
                 Sign off as final
@@ -275,8 +277,8 @@ export function ReportCard({
             <Alert color="blue" p="xs">
               Amending keeps the signed version in the record history; the report becomes "amended".
             </Alert>
-            <Textarea label="Corrected conclusion" minRows={3} value={conclusion} onChange={(e) => setConclusion(e.currentTarget.value)} />
-            <TextInput label="Reason for amendment" value={reason} onChange={(e) => setReason(e.currentTarget.value)} />
+            <DictationTextarea label="Corrected conclusion" minRows={3} value={conclusion} onValueChange={setConclusion} patientId={patientId} />
+            <DictationTextInput label="Reason for amendment" value={reason} onValueChange={setReason} patientId={patientId} />
             <Group justify="flex-end">
               <Button size="xs" variant="subtle" onClick={() => setAmending(false)}>
                 Cancel

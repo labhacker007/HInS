@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Autocomplete, Badge, Button, Divider, Group, Loader, Paper, SegmentedControl, Select, Stack, Text, TextInput } from '@mantine/core';
+import { Alert, Autocomplete, Badge, Button, Divider, Group, Loader, Paper, SegmentedControl, Select, Stack, Text } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import type { DiagnosticReport, Encounter, ServiceRequest, Task } from '@medplum/fhirtypes';
 import { useMedplum, useMedplumProfile } from '@medplum/react';
@@ -14,6 +14,7 @@ import {
   type DiagKind,
   type OrderPriority,
 } from '../lib/diagnostics.js';
+import { DictationTextarea, DictationTextInput } from './DictationTextarea.js';
 
 /**
  * Chart tab: order lab tests / imaging studies and track them.
@@ -159,7 +160,7 @@ function NewOrderForm({ patientId, onCreated }: { patientId: string; onCreated: 
           onChange={setEncounterId}
         />
       </Group>
-      <TextInput label="Clinical note for the department (optional)" value={note} onChange={(e) => setNote(e.currentTarget.value)} />
+      <DictationTextarea label="Clinical note for the department (optional)" autosize minRows={1} value={note} onValueChange={setNote} patientId={patientId} />
       <Group justify="flex-end">
         <Button size="sm" loading={saving} disabled={!text} onClick={save}>
           Place order
@@ -172,6 +173,7 @@ function NewOrderForm({ patientId, onCreated }: { patientId: string; onCreated: 
 function OrderRow({ order, task, report, onChanged }: { order: ServiceRequest; task?: Task; report?: DiagnosticReport; onChanged: () => void }) {
   const medplum = useMedplum();
   const [cancelling, setCancelling] = useState(false);
+  const orderPatientId = order.subject?.reference?.startsWith('Patient/') ? order.subject.reference.slice('Patient/'.length) : undefined;
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const statusText =
@@ -236,7 +238,7 @@ function OrderRow({ order, task, report, onChanged }: { order: ServiceRequest; t
             Cancelling marks the order "revoked" — it stays on record.
           </Alert>
           <Group align="flex-end">
-            <TextInput label="Reason" value={reason} onChange={(e) => setReason(e.currentTarget.value)} style={{ flex: 1 }} />
+            <DictationTextInput label="Reason" value={reason} onValueChange={setReason} style={{ flex: 1 }} patientId={orderPatientId} />
             <Button size="xs" variant="subtle" onClick={() => setCancelling(false)}>
               Keep
             </Button>
