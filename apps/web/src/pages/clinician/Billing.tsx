@@ -20,7 +20,7 @@ import {
   Alert,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import type { Account, ChargeItem, Claim, Coverage, Encounter, Invoice, Money, Organization, Patient } from '@medplum/fhirtypes';
+import type { Account, Bundle, ChargeItem, Claim, Coverage, Encounter, Invoice, Money, Organization, Patient } from '@medplum/fhirtypes';
 import { useMedplum, useMedplumProfile } from '@medplum/react';
 import { formatHumanName, formatPatientMrn } from '../../lib/fhirFormat.js';
 
@@ -103,6 +103,35 @@ import { formatHumanName, formatPatientMrn } from '../../lib/fhirFormat.js';
  * BedBoard.tsx uses for bed occupancy), not trusted from a page-load
  * snapshot that could be stale.
  *
+ * ── Claim creation is NOT atomic on this Medplum instance ──────────────
+ * Fixed post-review (2026-10-19). The original version created the Claim
+ * with one `createResource` call, then flipped the bundled ChargeItems
+ * with a separate `Promise.all` of `updateResource` calls -- a review
+ * correctly flagged that a partial failure there (the Claim succeeds,
+ * then one ChargeItem PUT fails) left a 'billable' item sitting in the
+ * list, selectable into a SECOND claim: an actual double-bill.
+ *
+ * The fix is NOT "wrap it in a FHIR transaction Bundle and trust FHIR's
+ * all-or-nothing semantics" -- that was tried and DISPROVEN live against
+ * this instance: a `Bundle.type: 'transaction'` containing a deliberately
+ * invalid Claim entry (missing the required `patient` field) alongside a
+ * valid ChargeItem PUT came back with the Claim entry correctly 400ing
+ * while the ChargeItem PUT in the SAME bundle still succeeded and
+ * persisted its status change. Whatever Medplum does internally with a
+ * "transaction" bundle, it is not one all-or-nothing database
+ * transaction here -- don't assume otherwise, and don't re-introduce
+ * that assumption later without re-verifying it live first.
+ *
+ * What this file actually does instead: still sends one Bundle (fewer
+ * round trips than N+1 separate requests, a smaller window than before),
+ * but checks every entry's response status individually rather than
+ * trusting the bundle as a whole. On any mismatch between the Claim's
+ * outcome and any ChargeItem's outcome, the clinician is told EXACTLY
+ * which ChargeItem ids ended up in which state (still billable with a
+ * claim that doesn't reference them, or billed with no claim behind
+ * them) so they can manually reconcile -- the honest fallback once true
+ * atomicity turned out not to be available, not a silent risk.
+ *
  * ── UI placement decision ───────────────────────────────────────────────
  * Reachable BOTH ways, like Scheduling.tsx: a top-level "Billing" nav
  * button (ClinicianApp.tsx) for billing-office-style work where staff
@@ -167,7 +196,13 @@ function chargeItemLabel(ci: ChargeItem): string {
 
 /** Finds the patient's Account, creating one lazily (and only once --
  * checked first) on first charge. See this file's header for why this is
- * lazy rather than created alongside the patient or the Coverage. */
+ * lazy rather than created alongside the patient or the Coverage.
+ * Scale assumption, stated plainly: this takes the first page (_count
+ * below, no pagination follow) and assumes one active Account per
+ * patient in practice -- fine at this codebase's current demo scale,
+ * same bounded-search convention used elsewhere in this app, but would
+ * need pagination if a patient ever accumulated more active Accounts
+ * than one page holds. */
 async function getOrCreateAccount(medplum: ReturnType<typeof useMedplum>, patientId: string): Promise<Account> {
   const existing = await medplum.searchResources('Account', { subject: `Patient/${patientId}`, _count: 5 });
   const active = existing.find((a) => a.status === 'active');
@@ -182,7 +217,8 @@ async function getOrCreateAccount(medplum: ReturnType<typeof useMedplum>, patien
 
 /** The real, fresh gating check -- see this file's header ("Coverage
  * gating"). Never trust a page-load snapshot for this; call again
- * immediately before creating a Claim. */
+ * immediately before creating a Claim. Same bounded-first-page scale
+ * assumption as getOrCreateAccount above -- fine at current demo scale. */
 async function findActiveCoverage(medplum: ReturnType<typeof useMedplum>, patientId: string): Promise<Coverage | undefined> {
   const coverages = await medplum.searchResources('Coverage', { beneficiary: `Patient/${patientId}`, _count: 10 });
   return coverages.find((c) => c.status === 'active');
@@ -756,7 +792,7 @@ function CreateClaimForm({
         net: ci.priceOverride,
       }));
 
-      const claim = await medplum.createResource<Claim>({
+      const claimResource: Claim = {
         resourceType: 'Claim',
         status: 'active',
         type: CLAIM_TYPE_PROFESSIONAL,
@@ -768,15 +804,62 @@ function CreateClaimForm({
         insurance: [{ sequence: 1, focal: true, coverage: { reference: `Coverage/${coverage.id}` } }],
         item: items,
         total: { value: total, currency: 'USD' },
-      });
+      };
 
-      // Non-destructive: flip status billable -> billed, never delete.
-      await Promise.all(
-        selectedItems.map((ci) => medplum.updateResource<ChargeItem>({ ...ci, status: 'billed' }))
+      // Fixed post-review (2026-10-19) -- see this file's header
+      // ("Claim creation is NOT atomic on this Medplum instance") for the
+      // full story. Short version: a FHIR `Bundle.type: 'transaction'` is
+      // supposed to be all-or-nothing, but verified LIVE against this
+      // instance that it is NOT -- a bundle with a deliberately-invalid
+      // Claim entry alongside a valid ChargeItem PUT came back with the
+      // Claim entry 400ing while the ChargeItem PUT still succeeded and
+      // persisted. So this still sends one Bundle (fewer round trips,
+      // smaller window than N+1 separate requests), but does NOT trust it
+      // to be atomic: every entry's response is checked individually, and
+      // on any mismatch the clinician is told EXACTLY which ChargeItem ids
+      // ended up in which state, so they can manually reconcile rather
+      // than unknowingly double-bill.
+      const txn: Bundle = {
+        resourceType: 'Bundle',
+        type: 'transaction',
+        entry: [
+          { resource: claimResource, request: { method: 'POST', url: 'Claim' } },
+          ...selectedItems.map((ci) => ({
+            resource: { ...ci, status: 'billed' as const },
+            request: { method: 'PUT' as const, url: `ChargeItem/${ci.id}` },
+          })),
+        ],
+      };
+      const result = await medplum.executeBatch(txn);
+      const claimEntry = result.entry?.[0];
+      const chargeEntries = result.entry?.slice(1) ?? [];
+      const claimOk = Boolean(claimEntry?.response?.status?.startsWith('2'));
+      const flippedOk = selectedItems.filter((_, i) => chargeEntries[i]?.response?.status?.startsWith('2'));
+      const flippedFailed = selectedItems.filter((_, i) => !chargeEntries[i]?.response?.status?.startsWith('2'));
+
+      if (claimOk && flippedFailed.length === 0) {
+        const claimId = claimEntry?.response?.location?.split('/')[1] ?? claimEntry?.resource?.id;
+        notifications.show({ message: `Claim created (Claim/${claimId}), ${selectedItems.length} charge(s) marked billed`, color: 'green' });
+        onDone();
+        return;
+      }
+
+      // Mismatch -- surface it precisely, don't paper over it with a
+      // generic error. The clinician needs to know exactly what state
+      // things are in to reconcile safely.
+      if (claimOk) {
+        const claimId = claimEntry?.response?.location?.split('/')[1] ?? claimEntry?.resource?.id;
+        throw new Error(
+          `Claim/${claimId} WAS created, but ${flippedFailed.length} of ${selectedItems.length} charge(s) failed to mark as billed: ` +
+            `${flippedFailed.map((ci) => chargeItemLabel(ci)).join(', ')}. Those item(s) may still be billable and could be` +
+            ` double-billed -- check Claim/${claimId} and the Charges panel before creating another claim with them.`
+        );
+      }
+      throw new Error(
+        `Claim was NOT created (rejected: ${claimEntry?.response?.outcome?.issue?.[0]?.details?.text ?? claimEntry?.response?.status}), ` +
+          `but ${flippedOk.length} of ${selectedItems.length} charge(s) were still marked billed with no claim behind them: ` +
+          `${flippedOk.map((ci) => chargeItemLabel(ci)).join(', ')}. Those item(s) need manual correction before being billed again.`
       );
-
-      notifications.show({ message: `Claim created (Claim/${claim.id}), ${selectedItems.length} charge(s) marked billed`, color: 'green' });
-      onDone();
     } catch (err) {
       notifications.show({ message: String(err), color: 'red' });
     } finally {

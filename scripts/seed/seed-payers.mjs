@@ -12,11 +12,18 @@
  * having no uniqueness constraint in FHIR/Medplum).
  *
  * These are real, named entities (same category as the existing seeded
- * Practitioner/Patient test data) -- not fabricated billing codes. One
- * US-domiciled and one India-domiciled payer are seeded, matching this
- * platform's dual-jurisdiction framing (docs §01/§03), even though this
- * round's Billing.tsx only builds the US-path claim workflow -- the
- * India path (NHCX) is a separate, unbuilt roadmap item (§13a).
+ * Practitioner/Patient test data) -- not fabricated billing codes.
+ *
+ * US-domiciled payers only, deliberately (fixed post-review, 2026-10-19):
+ * an earlier version of this script also seeded an India-domiciled payer
+ * to match this platform's dual-jurisdiction framing, but Billing.tsx
+ * hardcodes every money field (ChargeItem.priceOverride, Claim.total,
+ * PaymentReconciliation.paymentAmount) to `currency: 'USD'` -- a clinician
+ * could pick that payer for a Coverage and every charge/claim/payment
+ * against it would be silently denominated in USD. Dropped until the
+ * India path (NHCX, a separate, unbuilt roadmap item, §13a) is actually
+ * built with its own currency handling, rather than leave a payer in the
+ * dropdown that quietly produces wrong-currency billing today.
  *
  * Usage:
  *   node scripts/seed/seed-payers.mjs
@@ -37,7 +44,7 @@ const ORG_TYPE_SYSTEM = 'http://terminology.hl7.org/CodeSystem/organization-type
 
 const PAYERS = [
   { name: 'Aetna', country: 'US' },
-  { name: 'Star Health Insurance', country: 'IN' },
+  { name: 'UnitedHealthcare', country: 'US' },
 ];
 
 function b64url(buf) {
