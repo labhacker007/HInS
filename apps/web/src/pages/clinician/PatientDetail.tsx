@@ -67,8 +67,11 @@ export function PatientDetail() {
           </Text>
         </div>
         <Group gap="xs">
-          {/* Deep-links to Scheduling.tsx with the patient pre-selected via ?patientId= */}
+          {/* Deep-links to Scheduling.tsx / Billing.tsx with the patient pre-selected via ?patientId= */}
           <Button onClick={() => navigate(`/schedule?patientId=${id}`)}>Book appointment</Button>
+          <Button variant="light" onClick={() => navigate(`/billing?patientId=${id}`)}>
+            Billing
+          </Button>
           <Button component={Link} to="/" variant="subtle">
             ← All patients
           </Button>
