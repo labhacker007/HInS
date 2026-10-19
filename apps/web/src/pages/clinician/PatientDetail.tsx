@@ -28,6 +28,8 @@ import { PatientDemographics } from '../../components/PatientDemographics.js';
 import { PatientLifestyle } from '../../components/PatientLifestyle.js';
 import { PatientAllergies } from '../../components/PatientAllergies.js';
 import { PatientVitals } from '../../components/PatientVitals.js';
+import { ConsultNote } from '../../components/ConsultNote.js';
+import { ReferralPanel } from '../../components/ReferralPanel.js';
 
 const ENCOUNTER_CLASS = {
   OPD: { system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode', code: 'AMB', display: 'ambulatory' },
@@ -93,6 +95,8 @@ export function PatientDetail() {
           <Tabs.Tab value="allergies">Allergies</Tabs.Tab>
           <Tabs.Tab value="vitals">Vitals</Tabs.Tab>
           <Tabs.Tab value="lifestyle">Social history &amp; diet</Tabs.Tab>
+          <Tabs.Tab value="consult">Consult note</Tabs.Tab>
+          <Tabs.Tab value="referrals">Referrals</Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="notes" pt="md">
@@ -151,6 +155,14 @@ export function PatientDetail() {
         </Tabs.Panel>
         <Tabs.Panel value="lifestyle" pt="md">
           <PatientLifestyle patientId={id} />
+        </Tabs.Panel>
+
+        <Tabs.Panel value="consult" pt="md">
+          <ConsultNote patientId={id} patientName={formatHumanName(patient.name)} onSaved={reload} />
+        </Tabs.Panel>
+
+        <Tabs.Panel value="referrals" pt="md">
+          <ReferralPanel patientId={id} patientName={formatHumanName(patient.name)} />
         </Tabs.Panel>
       </Tabs>
     </Stack>
