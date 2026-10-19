@@ -4,6 +4,7 @@ import { notifications } from '@mantine/notifications';
 import type { MedicationAdministration, MedicationDispense, MedicationRequest } from '@medplum/fhirtypes';
 import { useMedplum } from '@medplum/react';
 import { formatHumanName } from '../lib/fhirFormat.js';
+import { DictationTextInput } from './DictationTextarea.js';
 
 /**
  * Pharmacy dispensing / administration panel — rendered inside
@@ -465,18 +466,20 @@ function AdministerForm({
           w={260}
         />
         {status === 'completed' ? (
-          <TextInput
+          <DictationTextInput
             label="Dose actually given"
             placeholder="e.g. 500mg PO"
             value={doseText}
-            onChange={(e) => setDoseText(e.currentTarget.value)}
+            onValueChange={setDoseText}
+            patientId={patientId}
           />
         ) : (
-          <TextInput
+          <DictationTextInput
             label="Reason not given"
             placeholder="e.g. Patient NPO for procedure"
             value={statusReason}
-            onChange={(e) => setStatusReason(e.currentTarget.value)}
+            onValueChange={setStatusReason}
+            patientId={patientId}
           />
         )}
         <Group justify="flex-end" gap="xs">

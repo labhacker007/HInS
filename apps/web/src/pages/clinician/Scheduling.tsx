@@ -5,6 +5,7 @@ import { notifications } from '@mantine/notifications';
 import type { Appointment, Patient, Practitioner } from '@medplum/fhirtypes';
 import { useMedplum, useMedplumProfile } from '@medplum/react';
 import { formatHumanName, formatPatientMrn } from '../../lib/fhirFormat.js';
+import { DictationTextInput } from '../../components/DictationTextarea.js';
 
 /**
  * Scheduling — docs/PLATFORM_BLUEPRINT.md §16's "fully EHR/EMR" gap
@@ -379,11 +380,12 @@ function BookAppointmentForm({
           <Select label="Duration" data={DURATIONS} value={duration} onChange={(v) => setDuration(v ?? '30')} w={120} />
         </Group>
 
-        <TextInput
+        <DictationTextInput
           label="Reason / service type"
           placeholder="e.g. Follow-up, Cardiology consult"
           value={reason}
-          onChange={(e) => setReason(e.currentTarget.value)}
+          onValueChange={setReason}
+          patientId={selectedPatient?.id}
         />
 
         <Group justify="flex-end">

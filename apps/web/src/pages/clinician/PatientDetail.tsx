@@ -32,6 +32,7 @@ import { ConsultNote } from '../../components/ConsultNote.js';
 import { ReferralPanel } from '../../components/ReferralPanel.js';
 import { DiagnosticOrders } from '../../components/DiagnosticOrders.js';
 import { DiagnosticResults } from '../../components/DiagnosticResults.js';
+import { DictationTextInput } from '../../components/DictationTextarea.js';
 
 const ENCOUNTER_CLASS = {
   OPD: { system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode', code: 'AMB', display: 'ambulatory' },
@@ -315,7 +316,7 @@ function NewRxForm({
   return (
     <Stack gap="xs" maw={480}>
       <TextInput label="Medication" placeholder="e.g. Amoxicillin 500mg" value={medication} onChange={(e) => setMedication(e.currentTarget.value)} />
-      <TextInput label="Dosage instructions" placeholder="e.g. 1 capsule 3x daily for 7 days" value={dosage} onChange={(e) => setDosage(e.currentTarget.value)} />
+      <DictationTextInput label="Dosage instructions" placeholder="e.g. 1 capsule 3x daily for 7 days" value={dosage} onValueChange={setDosage} patientId={patientId} />
       <Group justify="flex-end">
         <Button size="sm" loading={saving} disabled={!medication.trim()} onClick={handleSave}>
           Create prescription

@@ -1,0 +1,47 @@
+# Self-hosted speech-to-text (blueprint §08.1) for clinical dictation.
+#
+#   docker compose -f infra/docker-compose.asr.yml up -d
+#   # one-time model download into the named volume (idempotent):
+#   curl -X POST http://localhost:8000/v1/models/Systran/faster-whisper-small.en
+#
+# speaches (formerly faster-whisper-server), MIT licence:
+#   https://github.com/speaches-ai/speaches  — image ghcr.io/speaches-ai/speaches
+# The -cpu tag is a multi-arch manifest (linux/amd64 + linux/arm64), so it runs
+# natively on Apple Silicon. Pinned to an exact release, never `latest`.
+#
+# Audio never leaves this host: the browser POSTs to this container directly
+# (OpenAI-compatible POST /v1/audio/transcriptions). The model is stock
+# English-only Whisper — NOT validated for medical vocabulary; every transcript
+# is a draft the clinician must review before saving.
+name: hins-asr
+
+services:
+  speaches:
+    image: ghcr.io/speaches-ai/speaches:0.8.3-cpu
+    container_name: hins-asr-speaches
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # CORS: the Vite dev server and the dockerised web app (override with
+      # ASR_ALLOW_ORIGINS, a JSON list).
+      ALLOW_ORIGINS: ${ASR_ALLOW_ORIGINS:-["http://localhost:5173","http://localhost:3080"]}
+      ENABLE_UI: "false"
+      LOG_LEVEL: info
+      WHISPER__INFERENCE_DEVICE: cpu
+      WHISPER__COMPUTE_TYPE: int8
+      # Keep the model resident: unloading after idle would put a multi-second
+      # cold load in front of the next dictation.
+      WHISPER__TTL: "-1"
+    volumes:
+      - hf-hub-cache:/home/ubuntu/.cache/huggingface/hub
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://0.0.0.0:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  hf-hub-cache:
+    name: hins-asr-hf-cache

@@ -5,6 +5,7 @@ import type { Bundle, MedicationRequest } from '@medplum/fhirtypes';
 import { useMedplum } from '@medplum/react';
 import { recordEditEvent } from '../lib/auditApi.js';
 import { PharmacyPanel } from './PharmacyDispense.js';
+import { DictationTextInput } from './DictationTextarea.js';
 
 /**
  * A prescription with inline edit and full version history — the same
@@ -108,7 +109,7 @@ export function VersionedRx({
       {editing ? (
         <Stack gap="xs">
           <TextInput label="Medication" value={medication} onChange={(e) => setMedication(e.currentTarget.value)} />
-          <TextInput label="Dosage instructions" value={dosage} onChange={(e) => setDosage(e.currentTarget.value)} />
+          <DictationTextInput label="Dosage instructions" value={dosage} onValueChange={setDosage} patientId={patientId} />
           <Group justify="flex-end" gap="xs">
             <Button size="xs" variant="subtle" onClick={() => setEditing(false)} disabled={saving}>
               Cancel

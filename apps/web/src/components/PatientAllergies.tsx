@@ -11,6 +11,7 @@ import {
   markAllergyEnteredInError,
   type AllergyCategory,
 } from '../lib/patientProfile.js';
+import { DictationTextInput } from './DictationTextarea.js';
 
 /**
  * Allergies & intolerances (AllergyIntolerance) — list, add, and retract as
@@ -182,7 +183,7 @@ function NewAllergyForm({ patientId, fixedCategory, onCreated }: { patientId: st
           value={verification}
           onChange={(v) => setVerification((v ?? 'unconfirmed') as typeof verification)}
         />
-        <TextInput label="Reaction" placeholder="e.g. Hives, wheeze" value={reaction} onChange={(e) => setReaction(e.currentTarget.value)} />
+        <DictationTextInput label="Reaction" placeholder="e.g. Hives, wheeze" value={reaction} onValueChange={setReaction} patientId={patientId} />
         <Select label="Reaction severity" data={['mild', 'moderate', 'severe']} value={severity} onChange={setSeverity} clearable disabled={!reaction.trim()} />
       </SimpleGrid>
       <Group justify="flex-end" mt="sm">

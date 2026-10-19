@@ -1,20 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import {
-  Badge,
-  Button,
-  Divider,
-  Group,
-  Loader,
-  Menu,
-  MultiSelect,
-  Paper,
-  Select,
-  Stack,
-  Table,
-  Text,
-  TextInput,
-  Title,
-} from '@mantine/core';
+import { Badge, Button, Divider, Group, Loader, Menu, MultiSelect, Paper, Select, Stack, Table, Text, Title } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import type { NutritionOrder, Observation } from '@medplum/fhirtypes';
 import { useMedplum, useMedplumProfile } from '@medplum/react';
@@ -29,6 +14,7 @@ import {
   type LifestyleItem,
 } from '../lib/patientProfile.js';
 import { PatientAllergies } from './PatientAllergies.js';
+import { DictationTextInput } from './DictationTextarea.js';
 
 /**
  * Social history & diet — smoking (LOINC 72166-2 + SNOMED answers confirmed
@@ -173,12 +159,13 @@ function RecordLifestyle({ patientId, item, onSaved }: { patientId: string; item
       {item.answers && (
         <Select size="xs" w={170} placeholder="Choose…" data={item.answers.map((a) => ({ value: a.code, label: a.display }))} value={answer} onChange={setAnswer} clearable />
       )}
-      <TextInput
+      <DictationTextInput
         size="xs"
         style={{ flex: 1 }}
         placeholder={item.freeText ? 'e.g. 3 meals + 2 snacks, late dinner' : 'Detail / note (optional)'}
         value={note}
-        onChange={(e) => setNote(e.currentTarget.value)}
+        onValueChange={setNote}
+        patientId={patientId}
       />
       <Button size="xs" disabled={!ok} loading={saving} onClick={save}>
         Save
@@ -264,7 +251,7 @@ function DietOrders({ patientId }: { patientId: string }) {
             w={320}
             searchable
           />
-          <TextInput label="Instructions" placeholder="e.g. 1800 kcal/day, small frequent meals" style={{ flex: 1, minWidth: 220 }} value={instruction} onChange={(e) => setInstruction(e.currentTarget.value)} />
+          <DictationTextInput label="Instructions" placeholder="e.g. 1800 kcal/day, small frequent meals" style={{ flex: 1, minWidth: 220 }} value={instruction} onValueChange={setInstruction} patientId={patientId} />
           <Button disabled={!diets.length} loading={saving} onClick={place}>
             Place diet order
           </Button>

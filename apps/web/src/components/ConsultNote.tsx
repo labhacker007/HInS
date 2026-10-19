@@ -19,8 +19,9 @@ import { SnomedPicker } from './SnomedPicker.js';
 /**
  * Structured consult note (SOAP) — PatientDetail "Consult note" tab.
  *
- * Each section has its own DictateButton (browser speech-to-text,
- * DEV ONLY — see DictateButton.tsx header). Diagnoses are picked from the
+ * Each section has its own DictateButton (self-hosted Whisper; transcript
+ * appended as an editable draft — accuracy caveats in DictateButton.tsx's
+ * header). Diagnoses are picked from the
  * SNOMED CT starter subset (SnomedPicker) and saved as Conditions with
  * SNOMED CT + ICD-10 codings, provisional/confirmed/differential
  * verification, linked to the encounter and recorder. The note itself is
