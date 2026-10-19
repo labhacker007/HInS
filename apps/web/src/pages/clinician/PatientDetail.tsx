@@ -24,6 +24,8 @@ import { VersionedNote } from '../../components/VersionedNote.js';
 import { VersionedRx } from '../../components/VersionedRx.js';
 import { DictateButton } from '../../components/DictateButton.js';
 import { ConsentHistoryList } from '../../components/ConsentHistoryList.js';
+import { ConsultNote } from '../../components/ConsultNote.js';
+import { ReferralPanel } from '../../components/ReferralPanel.js';
 
 const ENCOUNTER_CLASS = {
   OPD: { system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode', code: 'AMB', display: 'ambulatory' },
@@ -85,6 +87,8 @@ export function PatientDetail() {
           <Tabs.Tab value="labs">Labs</Tabs.Tab>
           <Tabs.Tab value="rx">Prescriptions</Tabs.Tab>
           <Tabs.Tab value="consent">Consent</Tabs.Tab>
+          <Tabs.Tab value="consult">Consult note</Tabs.Tab>
+          <Tabs.Tab value="referrals">Referrals</Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="notes" pt="md">
@@ -130,6 +134,14 @@ export function PatientDetail() {
 
         <Tabs.Panel value="consent" pt="md">
           <RequestConsentPanel patientId={id} requesterId={profile?.id} requesterName={formatHumanName(profile?.name)} />
+        </Tabs.Panel>
+
+        <Tabs.Panel value="consult" pt="md">
+          <ConsultNote patientId={id} patientName={formatHumanName(patient.name)} onSaved={reload} />
+        </Tabs.Panel>
+
+        <Tabs.Panel value="referrals" pt="md">
+          <ReferralPanel patientId={id} patientName={formatHumanName(patient.name)} />
         </Tabs.Panel>
       </Tabs>
     </Stack>
