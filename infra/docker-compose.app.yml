@@ -1,0 +1,94 @@
+# HInS application containers (web + Fastify services).
+#
+# Infra (Medplum, Keycloak, Postgres, Redis) runs separately from
+# infra/docker-compose.yml under compose project "infra"; start it first
+# (`npm run infra:up`). This file is its own compose project ("hins-app")
+# and joins infra's network (infra_default) as an external network, so
+# `npm run app:down` can never stop or recreate infra containers.
+#
+# Usage (from repo root):
+#   npm run app:up     # build + start
+#   npm run app:down   # stop + remove app containers only
+#
+# Host ports:  web http://localhost:3080, consent 4001, deid 4003, audit 4005.
+#
+# Inside the network, services reach infra by service name. The web app's
+# VITE_* URLs are different: they're baked into the bundle at build time
+# and used by the browser, so they point at host-published localhost ports.
+
+name: hins-app
+
+x-service-env: &service-env
+  DATABASE_URL: postgres://hins:hins@postgres-hins:5432/hins
+  MEDPLUM_BASE_URL: http://medplum-server:8103
+  KEYCLOAK_BASE_URL: http://keycloak:8080
+  KEYCLOAK_REALM: hins-dev
+
+services:
+  web:
+    image: hins-web
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: web
+      args:
+        VITE_MEDPLUM_BASE_URL: http://localhost:8103/
+        VITE_MEDPLUM_CLIENT_ID: b62e0e1d-de31-4717-a14d-aa0656e08d6f
+        VITE_CONSENT_SERVICE_URL: http://localhost:4001
+        VITE_AUDIT_SERVICE_URL: http://localhost:4005
+    restart: unless-stopped
+    ports:
+      - '3080:80'
+
+  consent-service:
+    image: hins-consent-service
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: service
+      args:
+        SERVICE: consent-service
+    restart: unless-stopped
+    environment:
+      <<: *service-env
+      PORT: '4001'
+    ports:
+      - '4001:4001'
+
+  deid-service:
+    image: hins-deid-service
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: service
+      args:
+        SERVICE: deid-service
+    restart: unless-stopped
+    environment:
+      <<: *service-env
+      PORT: '4003'
+      CONSENT_SERVICE_URL: http://consent-service:4001
+    ports:
+      - '4003:4003'
+    depends_on:
+      - consent-service
+
+  audit-service:
+    image: hins-audit-service
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: service
+      args:
+        SERVICE: audit-service
+    restart: unless-stopped
+    environment:
+      <<: *service-env
+      PORT: '4005'
+    ports:
+      - '4005:4005'
+
+networks:
+  default:
+    name: infra_default
+    external: true

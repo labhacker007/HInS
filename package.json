@@ -19,6 +19,9 @@
     "dev:terminology-service": "npm run dev -w services/terminology-service",
     "dev:deid-service": "npm run dev -w services/deid-service",
     "dev:audit-service": "npm run dev -w services/audit-service",
-    "seed:demo": "node scripts/seed/seed-demo-data.mjs"
+    "seed:demo": "node scripts/seed/seed-demo-data.mjs",
+    "app:up": "docker compose -f infra/docker-compose.app.yml up -d --build",
+    "app:down": "docker compose -f infra/docker-compose.app.yml down",
+    "app:logs": "docker compose -f infra/docker-compose.app.yml logs -f"
   }
 }
