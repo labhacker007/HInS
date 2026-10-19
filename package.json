@@ -22,6 +22,7 @@
     "seed:demo": "node scripts/seed/seed-demo-data.mjs",
     "app:up": "docker compose -f infra/docker-compose.app.yml up -d --build",
     "app:down": "docker compose -f infra/docker-compose.app.yml down",
-    "app:logs": "docker compose -f infra/docker-compose.app.yml logs -f"
+    "app:logs": "docker compose -f infra/docker-compose.app.yml logs -f",
+    "seed:showcase": "esbuild scripts/seed/showcase/seed-showcase.ts --bundle --platform=node --format=esm --target=node22 --log-level=warning --outfile=scripts/seed/showcase/.build/seed-showcase.mjs && node scripts/seed/showcase/.build/seed-showcase.mjs"
   }
 }
